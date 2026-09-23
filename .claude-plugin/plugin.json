@@ -1,0 +1,8 @@
+{
+  "name": "cc-hero",
+  "version": "0.1.0",
+  "description": "Guitar practice in a pane beside Claude Code: /hero scrolls a song past a now-marker as tablature and standard notation, Guitar Hero style, and scores what you play. With the microphone listener on (bun + ffmpeg, started by /hero mic on) it hears the guitar, judges each note's pitch and timing, and doubles as a tuner (/hero tune). Without it, space strums for timing practice. Needs function hooks (early access) and an interactive terminal.",
+  "author": { "name": "Scott Meyer" },
+  "license": "MIT",
+  "keywords": ["guitar", "music", "tablature", "sheet-music", "tuner", "practice", "function-hooks"]
+}

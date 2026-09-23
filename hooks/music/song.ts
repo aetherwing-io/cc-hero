@@ -13,7 +13,17 @@ export type SongNote = {
   f: number
   /** Length in beats; 1 when left out. */
   l?: number
+  /** The picking-hand finger for a fingerpicking exercise: p i m a. */
+  finger?: 'p' | 'i' | 'm' | 'a'
+  /** The chord the note belongs to, when the exercise built it from one. */
+  chord?: string
 }
+
+/** One slot of a strumming pattern: down, up, muted down, muted up, or nothing. */
+export type StrumMark = 'd' | 'u' | 'x' | 'X' | '-'
+
+/** A strumming pattern: `div` slots a beat, `marks` cycling from the song's start. */
+export type StrumPattern = { div: number; marks: StrumMark[] }
 
 export type Song = {
   kind?: 'notes'
@@ -52,6 +62,8 @@ export type ChordSong = {
   bpm: number
   beatsPerBar: number
   chords: ChordSheetEvent[]
+  /** How to strum each chord; without one, a chord is one strum at its start. */
+  strum?: StrumPattern
   source?: string
 }
 
@@ -86,7 +98,23 @@ export type PlacedNote = {
   midi: number
   pos: number
   sharp: boolean
+  finger?: string
+  chord?: string
 }
+
+/** One strum of a chord under a pattern, what the judge scores in chord mode. */
+export type StrumTarget = {
+  index: number
+  beat: number
+  len: number
+  pcs: number[]
+  dir: StrumMark
+  chordIndex: number
+  name: string
+}
+
+/** Strum target indices start here so they never collide with chord indices. */
+export const STRUM_INDEX = 100000
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
@@ -115,7 +143,10 @@ export function parseSong(raw: unknown): AnySong {
       return ev
     })
     chords.sort((x, y) => x.b - y.b)
-    return { kind: 'chords', title, ...artist, bpm, beatsPerBar, chords, ...source }
+    const song: ChordSong = { kind: 'chords', title, ...artist, bpm, beatsPerBar, chords, ...source }
+    const strum = isRecord(raw.strum) && typeof raw.strum.div === 'number' && Array.isArray(raw.strum.marks) ? { div: Math.max(1, Math.min(4, Math.floor(raw.strum.div))), marks: raw.strum.marks.filter((m): m is StrumMark => m === 'd' || m === 'u' || m === 'x' || m === 'X' || m === '-') } : undefined
+    if (strum && strum.marks.length) song.strum = strum
+    return song
   }
   if (!Array.isArray(raw.notes) || raw.notes.length === 0) throw new Error('a song needs a non-empty "notes" array')
   const notes: SongNote[] = raw.notes.map((n, i) => {
@@ -125,7 +156,11 @@ export function parseSong(raw: unknown): AnySong {
     if (typeof s !== 'number' || s < 1 || s > 6 || !Number.isInteger(s)) throw new Error(`note ${i}: "s" (string) must be 1..6`)
     if (typeof f !== 'number' || f < 0 || f > 24 || !Number.isInteger(f)) throw new Error(`note ${i}: "f" (fret) must be 0..24`)
     if (l !== undefined && (typeof l !== 'number' || l <= 0)) throw new Error(`note ${i}: "l" (length) must be > 0`)
-    return l === undefined ? { b, s, f } : { b, s, f, l }
+    const note: SongNote = { b, s, f }
+    if (l !== undefined) note.l = l
+    if (n.finger === 'p' || n.finger === 'i' || n.finger === 'm' || n.finger === 'a') note.finger = n.finger
+    if (typeof n.chord === 'string') note.chord = n.chord
+    return note
   })
   notes.sort((x, y) => x.b - y.b || x.s - y.s)
   return { kind: 'notes', title, ...artist, bpm, beatsPerBar, tuning, notes, ...source }
@@ -155,8 +190,76 @@ export function place(song: Song): PlacedNote[] {
   return song.notes.map((n, index) => {
     const midi = midiOf(tuning, n.s, n.f)
     const { pos, sharp } = staffPosition(midi)
-    return { index, beat: n.b, len: n.l ?? 1, string: n.s, fret: n.f, midi, pos, sharp }
+    const placed: PlacedNote = { index, beat: n.b, len: n.l ?? 1, string: n.s, fret: n.f, midi, pos, sharp }
+    if (n.finger) placed.finger = n.finger
+    if (n.chord) placed.chord = n.chord
+    return placed
   })
+}
+
+/**
+ * Strum targets for a chord song with a pattern: the pattern's marks cycle over
+ * the song's slots from beat 0; each non-rest slot inside a chord is one strum.
+ */
+export function placeStrums(song: ChordSong, chords: readonly PlacedChord[]): StrumTarget[] {
+  const strum = song.strum
+  if (!strum || strum.marks.length === 0) return []
+  const out: StrumTarget[] = []
+  const step = 1 / strum.div
+  for (const c of chords) {
+    const first = Math.ceil(c.beat / step - 1e-9) || 0 // never -0
+    const last = Math.round((c.beat + c.len) / step)
+    for (let k = first; k < last; k++) {
+      const dir = strum.marks[k % strum.marks.length] ?? '-'
+      if (dir === '-') continue
+      out.push({ index: STRUM_INDEX + out.length, beat: k * step, len: step, pcs: dir === 'x' || dir === 'X' ? [] : c.pcs, dir, chordIndex: c.index, name: c.name })
+    }
+  }
+  return out
+}
+
+/**
+ * A pattern as people write one. With rests written ("D - DU -", "D- DU -U"),
+ * each beat's token is its slots: D, U, X (muted), x or -. Without rests
+ * ("D DU UDU", "D D DU"), the hand's motion decides: a D lands on the next beat
+ * and a U on the next off-beat, in eighths, which reads "D DU UDU" as
+ * D - D U - U D U.
+ */
+export function parseStrumText(text: string): StrumPattern | null {
+  const norm = text.trim().replace(/[↓v]/gi, 'D').replace(/[↑^]/g, 'U').replace(/_/g, '-')
+  if (!norm || !/^[DUXx\s-]+$/i.test(norm)) return null
+  const beats = norm.split(/\s+/).filter(Boolean)
+  const toMark = (ch: string): StrumMark => (ch === 'D' || ch === 'd' ? 'd' : ch === 'U' || ch === 'u' ? 'u' : ch === 'X' ? 'X' : ch === 'x' ? 'x' : '-')
+  if (norm.includes('-')) {
+    const div = Math.min(4, Math.max(...beats.map(b => b.length)))
+    const marks: StrumMark[] = []
+    for (const b of beats) {
+      const chars = b.split('')
+      for (let i = 0; i < div; i++) {
+        const ch = chars.length === div ? chars[i] : chars.length === 1 ? (i === 0 ? chars[0] : '-') : chars[Math.floor((i * chars.length) / div)]
+        marks.push(toMark(ch ?? '-'))
+      }
+    }
+    return { div, marks }
+  }
+  const marks: StrumMark[] = []
+  let slot = 0
+  for (const ch of norm.replace(/\s+/g, '')) {
+    const m = toMark(ch)
+    const wantOff = m === 'u' || m === 'X'
+    if ((slot % 2 === 1) !== wantOff) { marks.push('-'); slot++ }
+    marks.push(m)
+    slot++
+  }
+  while (marks.length % 2) marks.push('-')
+  return { div: 2, marks }
+}
+
+/** A pattern as text again: one token a beat. */
+export const strumText = (p: StrumPattern): string => {
+  const out: string[] = []
+  for (let i = 0; i < p.marks.length; i += p.div) out.push(p.marks.slice(i, i + p.div).map(m => (m === 'd' ? 'D' : m === 'u' ? 'U' : m === '-' ? '-' : m)).join(''))
+  return out.join(' ')
 }
 
 /** The last beat any note ends on. */

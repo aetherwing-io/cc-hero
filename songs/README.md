@@ -45,4 +45,11 @@ A chord song has `"kind": "chords"` and a `chords` array instead of `notes`:
 - `frets` a shape to draw, strings 6 (low E) to 1, `-1` for a muted string; left out, the built-in open shape or a barre at the root
 - `l` beats the chord lasts; left out, until the next chord
 
+A chord song may carry a strumming pattern: `"strum": { "div": 2, "marks": ["d","-","d","u","-","u","d","u"] }`
+(`div` slots a beat; marks `d` down, `u` up, `x`/`X` muted, `-` rest, cycling from
+beat 0). `/hero strum "D DU UDU"` sets one on the loaded sheet.
+
+Notes may carry `"finger": "p"|"i"|"m"|"a"` and `"chord": "G"` for fingerpicking
+exercises; the board shows them.
+
 `/hero play <Ultimate Guitar chords URL>` builds one of these from a page.

@@ -100,7 +100,7 @@ describe('search', () => {
     await ui.advance(50)
     await ui.advance(50)
     await ui.advance(50)
-    expect(await ui.find({ type: 'Text', text: /Amazing Grace · Misc Praise Songs · chords · 70 bpm/, in: 'hero' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Amazing Grace · Misc Praise Songs · chords · .*70 bpm/, in: 'hero' })).toBeDefined()
     await ui.unmount()
   })
 })

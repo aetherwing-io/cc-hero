@@ -50,7 +50,7 @@ const enqueue = (p: BoardPost) => { queue.push(p) }
 
 const now = () => Date.now()
 const msPerBeat = (song: BoardSong, tempo: number) => 60000 / (song.bpm * tempo)
-const targetsOf = (song: BoardSong): readonly Target[] => (song.kind === 'chords' ? song.chords : song.notes)
+const targetsOf = (song: BoardSong): readonly Target[] => (song.kind === 'chords' ? (song.strums.length ? song.strums : song.chords) : song.notes)
 const songLength = (song: BoardSong) => (song.kind === 'chords' ? chordLengthOf(song.chords) : lengthOf(song.notes))
 
 function fresh(songKey: string): State {
@@ -112,7 +112,21 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
           if (!next.posted) {
             next.posted = true
             const tally = s.judge.tally
-            enqueue({ kind: 'result', songKey: p.songKey, title: song.title, score: tally.score, accuracy: accuracyOf(tally), bestCombo: tally.bestCombo, verdict: verdictOf(tally) })
+            const hits: Record<string, number> = {}
+            const misses: Record<string, number> = {}
+            const timing: number[] = []
+            const labelOf = (index: number): string => {
+              if (song.kind === 'chords') return (song.strums.find(t => t.index === index)?.name ?? song.chords.find(c => c.index === index)?.name) ?? '?'
+              const n = song.notes.find(x => x.index === index)
+              return n ? `${nameOf(n.midi)} s${n.string} f${n.fret}` : '?'
+            }
+            for (const [index, j] of s.judge.judged) {
+              const label = labelOf(index)
+              const hit = j.grade === 'perfect' || j.grade === 'great' || j.grade === 'good'
+              if (hit) { hits[label] = (hits[label] ?? 0) + 1; if (j.dtMs !== undefined) timing.push(j.dtMs) }
+              else misses[label] = (misses[label] ?? 0) + 1
+            }
+            enqueue({ kind: 'result', songKey: p.songKey, title: song.title, score: tally.score, accuracy: accuracyOf(tally), bestCombo: tally.bestCombo, verdict: verdictOf(tally), tempo: s.tempo, grades: { ...tally.byGrade }, hits, misses, timing })
           }
         }
       }
@@ -124,6 +138,11 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
       if (!s || !p) return
       const song = p.song
       const k = key === 'space' ? ' ' : key.length === 1 ? key.toLowerCase() : key
+      if (p.view === 'stats') {
+        if (k === 't' || k === 'escape' || k === 'return') return enqueue({ kind: 'view', view: 'play' })
+        if (k === 'q') return enqueue({ kind: 'close' })
+        return
+      }
       if (p.view === 'search' && p.search) {
         const n = p.search.results.length
         if (k === 'down' || k === 'j') return surface.setState({ ...s, cursor: n ? (s.cursor + 1) % n : 0 })
@@ -186,6 +205,7 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
   if (columns < 40 || rows < 8) return <Text dimColor>cc-hero needs a wider, taller pane (drag its edge, or dock it in a fullscreen terminal)</Text>
 
   if (props.view === 'search') return searchView(Text, Box, props, s, surface, columns, rows)
+  if (props.view === 'stats') return statsView(Text, Box, props, columns, rows)
   if (props.view === 'tune') return tuner(Text, Box, props, columns)
   if (!props.song) return <Text dimColor>no song loaded · /hero play ode · /hero list · /hero search {'<song>'}</Text>
 
@@ -245,7 +265,7 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
   const TAB = 2
   const RULER = TAB + 6
   const LANE = RULER + 1
-  const DIAG = LANE + 2
+  const DIAG = LANE + (song.strums.length ? 3 : 2)
   const LYR = DIAG + 8
   const statusRow = Math.min(rows - 1, LYR + 3)
 
@@ -267,6 +287,20 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
   for (let i = 0; i < 6; i++) put(LABEL + NOW, TAB + i, { g: '│', c: 'yellow' })
   put(LABEL + NOW, RULER, { g: '▼', c: 'yellow' })
   put(LABEL + NOW, LANE, { g: '│', c: 'yellow' })
+  // strums under the pattern: arrows on the lane's row above, each colored by its grade
+  const STRUMS = LANE + 1
+  if (song.strums.length) {
+    put(0, STRUMS, { g: '♪', dim: true })
+    for (const t of song.strums) {
+      const x = xOf(t.beat)
+      if (x < LABEL || x >= columns) continue
+      const j = s.judge.judged.get(t.index)
+      const dtMs = (t.beat - beat) * mpb
+      const inWindow = dtMs >= -WINDOW.late && dtMs <= WINDOW.early
+      const g = t.dir === 'd' ? '↓' : t.dir === 'u' ? '↑' : t.dir === 'x' ? 'x' : 'X'
+      put(x, STRUMS, { g, c: j ? GRADE_COLOR[j.grade] : inWindow ? 'yellow' : t.beat < beat ? 'gray' : 'white', bold: !!j || inWindow })
+    }
+  }
 
   // the current chord: the last one that started; the next: the one after it
   let current: (typeof chords)[number] | undefined
@@ -345,11 +379,37 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
 
   const tally = s.judge.tally
   const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
-  const header = `♪ ${song.title} · chords · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
+  const header = `♪ ${song.title} · chords${song.strumText ? ` · ${song.strumText}` : ''} · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
   const status = statusOf(s, props, elapsed, mpb)
   const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && statusRow + 1 < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
+  return <Box flexDirection="column">{lines}</Box>
+}
+
+/** The stats view: recent runs, the weak spots of the current song, the lesson in progress. */
+function statsView(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, columns: number, rows: number) {
+  const st = props.stats
+  const lines: ReturnType<TextTag>[] = []
+  lines.push(<Text bold wrap="truncate-end">{`stats${props.song ? ` · ${props.song.title}` : ''} · t back · q close`}</Text>)
+  if (!st || st.runs.length === 0) {
+    lines.push(<Text dimColor>no runs yet: play a song through and come back</Text>)
+    return <Box flexDirection="column">{lines}</Box>
+  }
+  if (st.lesson) lines.push(<Text color="cyan" wrap="truncate-end">{st.lesson}</Text>)
+  lines.push(<Text dimColor>recent runs</Text>)
+  for (const r of st.runs.slice(0, Math.max(3, Math.min(10, rows - 12)))) {
+    const bar = '█'.repeat(Math.round(r.accuracy / 10)).padEnd(10, '·')
+    lines.push(<Text wrap="truncate-end">{`  ${r.when.padEnd(11)} `}<Text color={r.accuracy >= 90 ? 'greenBright' : r.accuracy >= 70 ? 'green' : r.accuracy >= 50 ? 'yellow' : 'red'}>{bar}</Text>{` ${String(r.accuracy).padStart(3)}% · ${String(r.score).padStart(5)} pts · combo ${String(r.bestCombo).padStart(3)}${r.tempo !== 1 ? ` · ×${r.tempo.toFixed(2)}` : ''} · ${r.title.slice(0, Math.max(10, columns - 60))}`}</Text>)
+  }
+  if (st.weak.length) {
+    lines.push(<Text> </Text>)
+    lines.push(<Text dimColor>weak spots (most missed, this song)</Text>)
+    for (const w of st.weak.slice(0, 6)) {
+      const total = w.misses + w.hits
+      lines.push(<Text wrap="truncate-end">{`  ${w.label.padEnd(16)} `}<Text color="red">{'▮'.repeat(Math.min(20, w.misses))}</Text>{` ${w.misses} missed of ${total} (${Math.round((w.hits / Math.max(1, total)) * 100)}% hit)`}</Text>)
+    }
+  }
   return <Box flexDirection="column">{lines}</Box>
 }
 
@@ -418,8 +478,9 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   const NOW = Math.max(4, Math.min(12, Math.floor(laneCols / 5)))
   const xOf = (b: number) => LABEL + NOW + Math.round((b - beat) * CPB)
 
-  // rows: header, six tab strings, a ruler, the staff, a status line, an optional help line
-  const fixed = 1 + 6 + 1 + 1 + (s.help ? 1 : 0)
+  // rows: header, six tab strings, a ruler (with chord names and picking fingers when the song has them), the staff, status, help
+  const hasFingers = song.notes.some(n => n.finger)
+  const fixed = 1 + 6 + 1 + 1 + (s.help ? 1 : 0) + (hasFingers ? 1 : 0)
   let maxPos = 8
   let minPos = 0
   for (const n of song.notes) { maxPos = Math.max(maxPos, n.pos); minPos = Math.min(minPos, n.pos) }
@@ -431,7 +492,7 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
     staffRows = maxPos - minPos + 1
   }
   const showStaff = staffRows <= spare
-  const staffTop = 8
+  const staffTop = hasFingers ? 9 : 8
   const rowOfPos = (pos: number) => (showStaff && pos <= maxPos && pos >= minPos ? staffTop + (maxPos - pos) : -1)
   const statusRow = showStaff ? staffTop + staffRows : staffTop
   const helpRow = statusRow + 1
@@ -486,6 +547,14 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
     const tailEnd = xOf(n.beat + n.len) - 1
     for (let tx = x + fret.length; tx <= tailEnd; tx++) if (isBackground(at(tx, ty))) put(tx, ty, { g: '═', c: color, dim: !j && !inWindow })
     for (let i = 0; i < fret.length; i++) put(x + i, ty, { g: fret[i] ?? ' ', c: color, bold, inv: x + i === LABEL + NOW })
+    if (hasFingers && n.finger && x >= LABEL) put(x, 8, { g: n.finger, c: color, dim: !inWindow && !j })
+    // the chord the note belongs to, named once where it begins
+    if (n.chord && x >= LABEL + 1 && !song.notes.some(o => o.chord === n.chord && o.beat < n.beat && o.beat > n.beat - song.beatsPerBar)) {
+      // beside the bar number, where the whole name fits
+      const lx = isBackground(at(x, 7)) ? x : x + 1
+      const fits = [...n.chord].every((_, i) => isBackground(at(lx + i, 7)))
+      if (fits) for (let i = 0; i < n.chord.length; i++) put(lx + i, 7, { g: n.chord[i] ?? ' ', c: 'cyan' })
+    }
     // staff: ledger lines, the accidental, the head
     if (!showStaff) continue
     const y = rowOfPos(n.pos)

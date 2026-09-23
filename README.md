@@ -62,6 +62,37 @@ Notes turn green when hit (bright for a perfect), yellow for a loose hit, magent
 for a wrong pitch, red for a miss. The magenta diamond on the staff is the pitch
 the microphone hears right now.
 
+## Exercises
+
+```
+/hero progression G pop            # I V vi IV in G, strummed D DU UDU (pop, axis, doowop, blues, jazz, folk, andalusian, canon)
+/hero progression Am i bVII bVI V  # roman numerals or chord names, in any key
+/hero pick travis G pop            # fingerpicking over a progression: travis, arp, folk, waltz, pinch
+/hero scale pentatonic A 1         # a scale box, up and back: major, minor, pentatonic, majorpentatonic, blues, dorian, mixolydian
+/hero caged C                      # the five CAGED forms of a chord up the neck
+/hero drill                        # something at random
+/hero strum "D DU UDU"             # a strumming pattern for the loaded chord sheet (D, U, X muted, - rest, one token a beat)
+```
+
+Options ride along: `--bpm 60`, `--x 3` (repeats), `--beats 2` (beats a chord).
+Fingerpicking shows the picking finger (p i m a) above each note and the chord
+it belongs to on the ruler. A chord sheet with a strumming pattern shows arrows
+under the chord lane, one target a strum; Ultimate Guitar chords pages bring
+their own pattern.
+
+## Progress and the coach
+
+```
+/hero stats                        # recent runs and the weak spots of the current song
+/hero coach                        # Claude reads your run data and says what to work on
+/hero lesson chord changes in G    # Claude plans 3-6 drills with accuracy goals
+/hero next                         # run the current step; the goal is checked when the run ends
+```
+
+Every finished run is recorded in the plugin store: score, accuracy, timing
+offsets, and which chords or notes were missed. The coach and the lesson planner
+get that data as text through the session's own model access, nothing else.
+
 ## Chord sheets
 
 A chords page (or a JSON file with `"kind": "chords"`) opens in chord mode: the
@@ -91,9 +122,11 @@ Nothing leaves the machine.
 
 - `brew install ffmpeg` if you do not have it.
 - macOS asks once for microphone access for the terminal app you run Claude in.
-- A different input: `/hero mic on` uses device 0; edit `--device` in
-  `hooks/register.tsx` for now (`ffmpeg -f avfoundation -list_devices true -i ""`
-  lists them).
+- A different input: `/hero mic devices` lists them and `/hero mic device <n or name>`
+  picks one. A guitar with a USB audio output (the Donner HUSH-I PRO, for one) or
+  any USB guitar interface shows up there and gives a far cleaner signal than a
+  microphone. A guitar with only a 1/4" jack (the plain HUSH-I) needs a small
+  interface between it and the Mac.
 
 Test it without a guitar:
 

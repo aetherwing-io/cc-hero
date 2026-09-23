@@ -3,7 +3,7 @@
 // ([ch]G[/ch] over lyrics, in [tab] blocks) and ASCII tablature. Pure; the fetch
 // lives in the hooks module.
 
-import type { AnySong, ChordSheetEvent, ChordSong, Song, SongNote } from '../music/song.ts'
+import type { AnySong, ChordSheetEvent, ChordSong, Song, SongNote, StrumMark, StrumPattern } from '../music/song.ts'
 import { parseChord } from '../music/chords.ts'
 
 export type UgResult = {
@@ -21,7 +21,7 @@ export type UgPage = {
   tab_view: {
     meta?: { tuning?: { name?: string; value?: string } }
     applicature?: Record<string, { frets: number[] }[]>
-    strummings?: { bpm?: number }[]
+    strummings?: { bpm?: number; denuminator?: number; is_triplet?: number; measures?: { measure?: number }[] }[]
     wiki_tab?: { content?: string }
   }
 }
@@ -91,12 +91,34 @@ export function songOfPage(page: UgPage, opts: ImportOptions = DEFAULT_IMPORT): 
     const chords = chordSheetOf(content, opts.beatsPerChord, page.tab_view.applicature ?? {})
     if (chords.length === 0) throw new Error('no chords found on that page')
     const song: ChordSong = { kind: 'chords', ...base, chords }
+    const strum = strumOfPage(page)
+    if (strum) song.strum = strum
     return song
   }
   const notes = tabNotesOf(content, opts.stepsPerBeat)
   if (notes.length === 0) throw new Error('no tablature found on that page (a chord sheet would import as chords)')
   const song: Song = { kind: 'notes', ...base, tuning: 'standard', notes }
   return song
+}
+
+// ---- strumming patterns ----
+
+/**
+ * A page's first strumming pattern. The codes are undocumented but consistent
+ * across pages: 1 down, 2 muted down, 3 accented down, 101 up, 102 muted up,
+ * 103 accented up, 201 palm mute, 202 and 203 rests (a 3/4 "D D DU" reads
+ * 1 202 1 202 1 101). Accents are drawn as plain strums.
+ */
+const STRUM_CODES: Record<number, StrumMark> = { 1: 'd', 2: 'x', 3: 'd', 101: 'u', 102: 'X', 103: 'u', 201: 'x', 202: '-', 203: '-' }
+
+export function strumOfPage(page: UgPage): StrumPattern | null {
+  const st = page.tab_view.strummings?.find(s => Array.isArray(s.measures) && s.measures.length > 0)
+  if (!st) return null
+  const den = st.denuminator ?? 8
+  const div = Math.max(1, Math.min(4, Math.round(den / 4)))
+  const marks = st.measures!.map(m => STRUM_CODES[m.measure ?? 202] ?? '-')
+  if (!marks.some(m => m !== '-')) return null
+  return { div, marks }
 }
 
 // ---- chord sheets ----

@@ -28,7 +28,7 @@ describe('score', () => {
     const notes = place(song)
     const j = newJudge()
     const made = judge(j, notes, [onset(10, 65)], WINDOW.late + 1, MPB, ORIGIN)
-    expect(made).toEqual([{ index: 0, grade: 'wrong', dtMs: 10, heardMidi: 65 }])
+    expect(made).toEqual([{ index: 0, grade: 'wrong', dtMs: 10, heardMidi: 65, heard: 'F4' }])
   })
 
   test('each onset scores once', async () => {

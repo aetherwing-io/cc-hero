@@ -1,8 +1,15 @@
 // The judge: which onsets hit which notes, how well, and the running score.
 // Pure and deterministic, so the board can replay it and a test can pin it.
 
-import type { PlacedNote } from './song.ts'
 import type { Onset } from '../mic/state.ts'
+import { chromaMatch } from './chords.ts'
+import { nameOf } from './notes.ts'
+
+/** What the judge scores against: a note by pitch, or a chord by its pitch classes. */
+export type Target = { index: number; beat: number; len: number; midi?: number; pcs?: readonly number[] }
+
+/** How alike a strum's chroma and the chord's template must be to count. */
+export const CHORD_MATCH = 0.72
 
 export type Grade = 'perfect' | 'great' | 'good' | 'wrong' | 'miss'
 
@@ -13,6 +20,8 @@ export type Judgment = {
   dtMs?: number
   /** The pitch heard on a wrong note. */
   heardMidi?: number
+  /** What was heard on a wrong note, as words: a note name or a chord name. */
+  heard?: string
 }
 
 export type Tally = { score: number; base: number; combo: number; bestCombo: number; hits: number; judged: number; byGrade: Record<Grade, number> }
@@ -61,7 +70,18 @@ export const newJudge = (): JudgeState => ({ judged: new Map(), used: new Set(),
  * Onsets carry wall-clock times; `originMs` is the wall-clock time of beat 0.
  * Returns the new judgments, in order.
  */
-export function judge(state: JudgeState, notes: readonly PlacedNote[], onsets: readonly Onset[], nowMs: number, msPerBeat: number, originMs: number): Judgment[] {
+/** Whether an onset is the target: the pitch itself, or for a chord its chroma, its named chord, or a chord tone. */
+export function matches(o: Onset, n: Target): boolean {
+  if (n.pcs && n.pcs.length) {
+    if (o.chroma && o.chroma.length === 12) return chromaMatch(o.chroma, n.pcs) >= CHORD_MATCH
+    return o.midi >= 0 && n.pcs.includes(((o.midi % 12) + 12) % 12)
+  }
+  return o.midi === n.midi
+}
+
+const heardOf = (o: Onset): string => o.chord ?? (o.midi >= 0 ? nameOf(o.midi) : 'noise')
+
+export function judge(state: JudgeState, notes: readonly Target[], onsets: readonly Onset[], nowMs: number, msPerBeat: number, originMs: number): Judgment[] {
   const out: Judgment[] = []
   const settle = (j: Judgment) => {
     state.judged.set(j.index, j)
@@ -79,7 +99,7 @@ export function judge(state: JudgeState, notes: readonly PlacedNote[], onsets: r
       if (state.used.has(o.t)) continue
       const dt = o.t - originMs - at
       if (dt < -WINDOW.early || dt > WINDOW.late) continue
-      if (o.midi === n.midi) {
+      if (matches(o, n)) {
         if (!best || Math.abs(dt) < Math.abs(best.dt)) best = { o, dt }
       } else if (!wrong || Math.abs(dt) < Math.abs(wrong.dt)) wrong = { o, dt }
     }
@@ -92,7 +112,7 @@ export function judge(state: JudgeState, notes: readonly PlacedNote[], onsets: r
       // the window closed: a wrong pitch in it is a "wrong", silence a "miss"
       if (wrong) {
         state.used.add(wrong.o.t)
-        settle({ index: n.index, grade: 'wrong', dtMs: Math.round(wrong.dt), heardMidi: wrong.o.midi })
+        settle({ index: n.index, grade: 'wrong', dtMs: Math.round(wrong.dt), heardMidi: wrong.o.midi, heard: heardOf(wrong.o) })
       } else settle({ index: n.index, grade: 'miss' })
     }
   }

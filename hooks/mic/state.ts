@@ -1,16 +1,24 @@
-// The file the listener writes and the mod reads: one JSON object, rewritten
-// whole (write to a temp name, then rename) so a reader never sees half of it.
+// The state the listener streams and the mod reads: one JSON object per line,
+// each the whole state, so a reader never sees half of it.
 
-/** One note the listener heard start. */
+/** One note or strum the listener heard start. */
 export type Onset = {
-  /** Wall-clock milliseconds (Date.now()) when the note began. */
+  /** Wall-clock milliseconds when the note began. */
   t: number
+  /** The pitch YIN settled on, or -1 for a strum with no single pitch. */
   midi: number
   hz: number
   cents: number
   /** RMS level at the onset, 0..1. */
   rms: number
+  /** Energy by pitch class, C first, scaled to a maximum of 1; for chords. */
+  chroma?: number[]
+  /** The triad or seventh template the chroma matched best, and how well (0..1). */
+  chord?: string
+  chordScore?: number
 }
+
+export type MicNow = { hz: number; midi: number; cents: number; rms: number; chord?: string; chordScore?: number }
 
 export type MicState = {
   /** Wall-clock milliseconds of the last write: a heartbeat. */
@@ -20,7 +28,7 @@ export type MicState = {
   /** Wall-clock milliseconds when its first audio sample arrived; onset times count from it. */
   started?: number
   /** What the last frame heard, or null in silence. */
-  now: { hz: number; midi: number; cents: number; rms: number } | null
+  now: MicNow | null
   /** The most recent onsets, oldest first, at most ONSET_RING of them. */
   onsets: Onset[]
   /** A message for the status line: what device it opened, or why it failed. */
@@ -43,7 +51,7 @@ export function parseMicState(text: string): MicState | null {
     const onsets = r.onsets.filter((o): o is Onset =>
       typeof o === 'object' && o !== null && typeof (o as Onset).t === 'number' && typeof (o as Onset).midi === 'number')
     const now = typeof r.now === 'object' && r.now !== null && typeof (r.now as { midi?: unknown }).midi === 'number'
-      ? (r.now as MicState['now'])
+      ? (r.now as MicNow)
       : null
     const state: MicState = { t: r.t, pid: r.pid, now, onsets }
     if (typeof r.started === 'number' && r.started > 0) state.started = r.started

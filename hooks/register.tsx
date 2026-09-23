@@ -6,12 +6,15 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { BoardPost, BoardProps, MicProps } from './board/props.ts'
 import { parseMicState, STALE_MS, type MicState } from './mic/state.ts'
-import { lengthOf, parseSong, place, STARTERS, type PlacedNote, type Song } from './music/song.ts'
+import { chordLengthOf, isChordSong, lengthOf, parseSong, place, placeChords, STARTERS, type AnySong, type PlacedChord, type PlacedNote } from './music/song.ts'
+import { DEFAULT_IMPORT, searchResultsOf, songOfPage, tabPageOf, type ImportOptions, type UgResult } from './ug/parse.ts'
 
 const PANE = 'hero'
 const PANE_ROWS = 26
 const USAGE = [
-  '/hero play [song | path.json]   open the pane with a song (default: ode)',
+  '/hero play [song | path.json | url | #n]   open the pane with a song (default: ode)',
+  '/hero search <song or artist>   look a song up on Ultimate Guitar; then /hero play #n',
+  '/hero import beats|steps|bpm <n>  chord sheets: beats per chord (4); tabs: columns per beat (4), tempo (90)',
   '/hero list                      the built-in songs and the file format',
   '/hero tune                      the tuner (starts the microphone)',
   '/hero mic on|off|status         the microphone listener',
@@ -22,9 +25,12 @@ const USAGE = [
   'in the pane (click it first): enter starts · space strums · p pause · r restart · +/- tempo · m mic · t tuner · ? keys · esc back',
 ].join('\n')
 
-type Loaded = { key: string; song: Song; notes: PlacedNote[] }
+type Loaded = { key: string; song: AnySong; notes: PlacedNote[]; chords: PlacedChord[] }
 
 let loaded: Loaded | undefined
+let lastSearch: UgResult[] = []
+let importOptions: ImportOptions = { ...DEFAULT_IMPORT }
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 let view: 'play' | 'tune' = 'play'
 let best: Record<string, number> = {}
 let paneOpen = false
@@ -55,7 +61,7 @@ const micProps = (nowMs: number): MicProps => {
 
 const boardProps = (nowMs: number): BoardProps => ({
   songKey: loaded?.key ?? '',
-  song: loaded ? { title: loaded.song.title, bpm: loaded.song.bpm, beatsPerBar: loaded.song.beatsPerBar, tuning: loaded.song.tuning, notes: loaded.notes } : null,
+  song: loaded ? { kind: isChordSong(loaded.song) ? 'chords' : 'notes', title: loaded.song.artist ? `${loaded.song.title} · ${loaded.song.artist}` : loaded.song.title, bpm: loaded.song.bpm, beatsPerBar: loaded.song.beatsPerBar, tuning: isChordSong(loaded.song) ? 'standard' : loaded.song.tuning, notes: loaded.notes, chords: loaded.chords } : null,
   mic: micProps(nowMs),
   best: loaded ? best[loaded.key] ?? 0 : 0,
   view,
@@ -69,6 +75,8 @@ export const register: Register = on => {
     if (typeof stored === 'object' && stored !== null) best = { ...(stored as Record<string, number>) }
     const lat = await $.store.get('latency').catch(() => undefined)
     if (typeof lat === 'number') latencyMs = lat
+    const imp = await $.store.get('import').catch(() => undefined)
+    if (typeof imp === 'object' && imp !== null) importOptions = { ...importOptions, ...(imp as Partial<ImportOptions>) }
     await $.command.register({
       name: 'hero',
       description: 'Guitar practice: a song as tab and staff scrolling past a now-marker, scored from the microphone (cc-hero)',
@@ -111,10 +119,35 @@ export const register: Register = on => {
           return { text: `cc-hero: ${err instanceof Error ? err.message : String(err)}` }
         }
         view = 'play'
-        await $.store.set('song', name).catch(() => undefined)
+        await $.store.set('song', loaded.key).catch(() => undefined)
         await open()
-        const bars = Math.ceil(lengthOf(loaded.notes) / loaded.song.beatsPerBar)
-        return { text: `♪ ${loaded.song.title} · ${loaded.song.bpm} bpm · ${bars} bars · click the pane, then enter starts (space strums without a mic; m turns the mic on)` }
+        const chordy = isChordSong(loaded.song)
+        const bars = Math.ceil((chordy ? chordLengthOf(loaded.chords) : lengthOf(loaded.notes)) / loaded.song.beatsPerBar)
+        const what = chordy ? `${loaded.chords.length} chords` : `${loaded.notes.length} notes`
+        return { text: `♪ ${loaded.song.title}${loaded.song.artist ? ` · ${loaded.song.artist}` : ''} · ${loaded.song.bpm} bpm · ${bars} bars · ${what} · click the pane, then enter starts (space strums without a mic; m turns the mic on)` }
+      }
+      case 'search': {
+        if (!arg) return { text: '/hero search <song or artist>' }
+        let results: UgResult[]
+        try {
+          results = searchResultsOf(await fetchText($, `https://www.ultimate-guitar.com/search.php?search_type=title&value=${encodeURIComponent(arg)}`))
+        } catch (err) {
+          return { text: `cc-hero: search failed: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        lastSearch = results.slice(0, 15)
+        if (lastSearch.length === 0) return { text: `cc-hero: nothing on Ultimate Guitar for "${arg}" (chords and tabs only)` }
+        const rows = lastSearch.map((r, i) => `${String(i + 1).padStart(2)}. ${r.type.padEnd(6)} ${r.song} · ${r.artist} · ${r.votes} votes${r.rating ? ` · ${r.rating.toFixed(1)}★` : ''}`)
+        return { text: [...rows, '', '/hero play #n opens one (chords play as a chord sheet with lyrics; tabs as notes)'].join('\n') }
+      }
+      case 'import': {
+        const [what = '', value = ''] = arg.split(/\s+/)
+        const n = Number(value)
+        const key = what === 'beats' ? 'beatsPerChord' : what === 'steps' ? 'stepsPerBeat' : what === 'bpm' ? 'bpm' : undefined
+        if (!key) return { text: `import: beats per chord ${importOptions.beatsPerChord} · tab columns per beat ${importOptions.stepsPerBeat} · default bpm ${importOptions.bpm} · /hero import beats|steps|bpm <n>` }
+        if (!Number.isFinite(n) || n <= 0) return { text: `cc-hero: /hero import ${what} <number>` }
+        importOptions = { ...importOptions, [key]: n }
+        await $.store.set('import', importOptions).catch(() => undefined)
+        return { text: `import ${what} set to ${n} · reload the song with /hero play to apply` }
       }
       case 'tune':
         view = 'tune'
@@ -198,8 +231,11 @@ export const register: Register = on => {
     paneOpen = true
     if (!loaded) {
       // a reload (--plugin-dir on a save) drops this module's state: pick the song back up
-      const name = await $.store.get('song').catch(() => undefined)
-      if (typeof name === 'string') loaded = await load($, name).catch(() => undefined)
+      const key = await $.store.get('song').catch(() => undefined)
+      if (typeof key === 'string') {
+        const name = key.startsWith('file:') ? key.slice(5) : key.startsWith('ug:') ? `https://tabs.ultimate-guitar.com/tab/${key.slice(3)}` : key
+        loaded = await load($, name).catch(() => undefined)
+      }
     }
     if (e.surface !== 'terminal') {
       const { Text } = $.ui.resolve(e)
@@ -212,15 +248,43 @@ export const register: Register = on => {
   })
 }
 
+const placedOf = (key: string, song: AnySong): Loaded =>
+  isChordSong(song) ? { key, song, notes: [], chords: placeChords(song) } : { key, song, notes: place(song), chords: [] }
+
+async function fetchText($: EngineInterface, url: string): Promise<string> {
+  const r = await $.http.fetch(url, { headers: { 'user-agent': UA, accept: 'text/html' } })
+  if (!r.ok) throw new Error(`${url} answered ${r.status}`)
+  return r.text
+}
+
 async function load($: EngineInterface, name: string): Promise<Loaded> {
   const starter = STARTERS[name.toLowerCase()]
-  if (starter) return { key: name.toLowerCase(), song: starter, notes: place(starter) }
-  if (!/\.json$/i.test(name)) throw new Error(`no song "${name}" · /hero list shows them, or give a path to a .json file`)
+  if (starter) return placedOf(name.toLowerCase(), starter)
+  const pick = /^#?(\d{1,2})$/.exec(name)
+  if (pick) {
+    const r = lastSearch[Number(pick[1]) - 1]
+    if (!r) throw new Error(lastSearch.length ? `pick 1 to ${lastSearch.length} from the last search` : 'no search to pick from · /hero search <song> first')
+    return load($, r.url)
+  }
+  if (/^https?:\/\//.test(name)) {
+    const id = /(\d+)\/?$/.exec(name)?.[1]
+    const key = id ? `ug:${id}` : `ug:${name}`
+    const cached = await $.store.get(key).catch(() => undefined)
+    if (cached) {
+      try { return placedOf(key, parseSong(cached)) } catch { /* stale cache: fetch again */ }
+    }
+    const page = tabPageOf(await fetchText($, name))
+    if (!page) throw new Error('that page has no tab in it (is it an Ultimate Guitar tab or chords page?)')
+    const song = songOfPage(page, importOptions)
+    await $.store.set(key, song).catch(() => undefined)
+    return placedOf(key, song)
+  }
+  if (!/\.json$/i.test(name)) throw new Error(`no song "${name}" · /hero list shows them, /hero search finds one, or give a path to a .json file`)
   const text = await $.fs.read(name)
   let raw: unknown
   try { raw = JSON.parse(text) } catch { throw new Error(`${name} is not JSON`) }
   const song = parseSong(raw)
-  return { key: `file:${name}`, song, notes: place(song) }
+  return placedOf(`file:${name}`, song)
 }
 
 function startMic($: EngineInterface, input?: string) {

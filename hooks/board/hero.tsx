@@ -10,8 +10,9 @@ import type { ClientElements, ClientSurface } from 'claude-code'
 import type { Onset } from '../mic/state.ts'
 import type { BoardPost, BoardProps, BoardSong } from './props.ts'
 import { isLinePosition, nameOf, nearestString, staffPosition, STRING_LABELS, TUNINGS } from '../music/notes.ts'
-import { accuracyOf, judge, newJudge, verdictOf, WINDOW, type Grade, type JudgeState, type Judgment } from '../music/score.ts'
-import { lengthOf } from '../music/song.ts'
+import { accuracyOf, judge, newJudge, verdictOf, WINDOW, type Grade, type JudgeState, type Judgment, type Target } from '../music/score.ts'
+import { chordLengthOf, lengthOf } from '../music/song.ts'
+import { templateOf } from '../music/chords.ts'
 
 type Mode = 'idle' | 'countin' | 'playing' | 'paused' | 'done'
 
@@ -46,6 +47,8 @@ const enqueue = (p: BoardPost) => { queue.push(p) }
 
 const now = () => Date.now()
 const msPerBeat = (song: BoardSong, tempo: number) => 60000 / (song.bpm * tempo)
+const targetsOf = (song: BoardSong): readonly Target[] => (song.kind === 'chords' ? song.chords : song.notes)
+const songLength = (song: BoardSong) => (song.kind === 'chords' ? chordLengthOf(song.chords) : lengthOf(song.notes))
 
 function fresh(songKey: string): State {
   return { songKey, mode: 'idle', origin: 0, pausedAt: 0, tempo: 1, judge: newJudge(), strums: [], help: false, posted: false, ticks: 0 }
@@ -98,10 +101,10 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
         const t = now() - s.origin
         if (s.mode === 'countin' && t >= 0) next.mode = 'playing'
         const onsets: Onset[] = p.mic.on ? [...p.mic.onsets, ...s.strums] : s.strums
-        const made = judge(s.judge, song.notes, onsets, t, mpb, s.origin)
+        const made = judge(s.judge, targetsOf(song), onsets, t, mpb, s.origin)
         const lastMade = made[made.length - 1]
         if (lastMade) next.last = lastMade
-        if (next.mode === 'playing' && t > (lengthOf(song.notes) + TAIL_BEATS) * mpb) {
+        if (next.mode === 'playing' && t > (songLength(song) + TAIL_BEATS) * mpb) {
           next = { ...next, mode: 'done', pausedAt: now() }
           if (!next.posted) {
             next.posted = true
@@ -134,18 +137,20 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
       if (k === ' ') {
         if (s.mode === 'idle' || s.mode === 'done') return surface.setState(start(s, song))
         if (s.mode !== 'playing' && s.mode !== 'countin') return
-        // a strum: the right pitch for whichever unjudged note is nearest in time
+        // a strum: the right pitch (or chord) for whichever unjudged target is nearest in time
         const t = now()
         const mpb = msPerBeat(song, s.tempo)
         const rel = t - s.origin
-        let target: { midi: number; dt: number } | undefined
-        for (const n of song.notes) {
+        let target: { n: Target; dt: number } | undefined
+        for (const n of targetsOf(song)) {
           if (s.judge.judged.has(n.index)) continue
           const dt = rel - n.beat * mpb
           if (dt < -WINDOW.early || dt > WINDOW.late) continue
-          if (!target || Math.abs(dt) < Math.abs(target.dt)) target = { midi: n.midi, dt }
+          if (!target || Math.abs(dt) < Math.abs(target.dt)) target = { n, dt }
         }
-        const strums = [...s.strums.slice(-40), { t, midi: target?.midi ?? -1, hz: 0, cents: 0, rms: 1 }]
+        const strum: Onset = { t, midi: target?.n.midi ?? -1, hz: 0, cents: 0, rms: 1 }
+        if (target?.n.pcs) strum.chroma = templateOf(target.n.pcs)
+        const strums = [...s.strums.slice(-40), strum]
         return surface.setState({ ...s, strums })
       }
     })
@@ -168,9 +173,170 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
   if (columns < 40 || rows < 8) return <Text dimColor>cc-hero needs a wider, taller pane (drag its edge, or dock it in a fullscreen terminal)</Text>
 
   if (props.view === 'tune') return tuner(Text, Box, props, columns)
-  if (!props.song) return <Text dimColor>no song loaded · /hero play ode · /hero list</Text>
+  if (!props.song) return <Text dimColor>no song loaded · /hero play ode · /hero list · /hero search {'<song>'}</Text>
 
-  return board(Text, Box, props, props.song, s, columns, rows)
+  return props.song.kind === 'chords' ? chordBoard(Text, Box, props, props.song, s, columns, rows) : board(Text, Box, props, props.song, s, columns, rows)
+}
+
+/** A strummed chord's name in the status: what the listener matched, or the note it settled on. */
+const heardText = (mic: BoardProps['mic']) => {
+  const h = mic.now
+  if (!h) return null
+  if (h.chord && (h.midi < 0 || (h.chordScore ?? 0) >= 0.8)) return `${h.chord}${h.chordScore !== undefined ? ` ${Math.round(h.chordScore * 100)}%` : ''}`
+  return h.midi >= 0 ? `${nameOf(h.midi)} ${h.cents >= 0 ? '+' : ''}${h.cents}¢` : null
+}
+
+function micStatus(props: BoardProps): string {
+  const heard = heardText(props.mic)
+  return !props.mic.on ? 'mic off · space strums · m for mic'
+    : !props.mic.alive ? `mic starting… ${props.mic.message ?? ''}`.trim()
+    : heard ? `mic ● ${heard}`
+    : props.mic.message && /exited|not start|stopped/.test(props.mic.message) ? `mic ✗ ${props.mic.message}` : 'mic ○'
+}
+
+function statusOf(s: State, props: BoardProps, elapsed: number, mpb: number): { text: string; color?: string } {
+  const tally = s.judge.tally
+  const micText = micStatus(props)
+  switch (s.mode) {
+    case 'idle': return { text: `space or enter starts · ${micText} · t tuner · ? keys` }
+    case 'countin': return { text: `count-in ${Math.max(1, Math.ceil(-elapsed / mpb))} · ${micText}`, color: 'yellow' }
+    case 'paused': return { text: 'paused · p resumes · r restarts', color: 'yellow' }
+    case 'done': return { text: `done · ${verdictOf(tally)} · ${tally.score} pts · ${accuracyOf(tally)}% · best combo ${tally.bestCombo} · enter plays again`, color: 'cyan' }
+    case 'playing': {
+      const j = s.last
+      const word = !j ? '…' : j.grade === 'wrong' ? `wrong: heard ${j.heard ?? (j.heardMidi === undefined ? '?' : nameOf(j.heardMidi))}` : j.grade === 'miss' ? 'miss' : `${GRADE_WORD[j.grade]} ${j.dtMs === undefined ? '' : `(${j.dtMs > 0 ? '+' : ''}${j.dtMs}ms)`}`
+      return { text: `${word} · ${micText}`, color: j ? GRADE_COLOR[j.grade] : undefined }
+    }
+  }
+}
+
+const HELP = 'enter/space start · space strum · p pause · r restart · +/- tempo · m mic · t tuner · ? hide · q close · esc back to prompt'
+
+/** The chord sheet view: a lane of chord names, the current and next shapes, the words. */
+function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, song: BoardSong, s: State, columns: number, rows: number) {
+  const mpb = msPerBeat(song, s.tempo)
+  const elapsed = elapsedOf(s, song)
+  const beat = elapsed / mpb
+  const laneCols = columns - LABEL
+  const CPB = laneCols >= 56 ? 4 : 3
+  const NOW = Math.max(4, Math.min(12, Math.floor(laneCols / 5)))
+  const xOf = (b: number) => LABEL + NOW + Math.round((b - beat) * CPB)
+  const grid: Cell[][] = Array.from({ length: rows }, () => Array.from({ length: columns }, () => ({ g: ' ' })))
+  const put = (x: number, y: number, cell: Cell) => { if (x >= 0 && x < columns && y >= 0 && y < rows) grid[y]![x] = cell }
+  const text = (x: number, y: number, t: string, style: Omit<Cell, 'g'> = {}) => { for (let i = 0; i < t.length; i++) put(x + i, y, { g: t[i] ?? ' ', ...style }) }
+  const chords = song.chords
+
+  // rows: header, section, six tab lines with each chord's voicing stacked at its beat, a ruler,
+  // the chord lane under them, a gap, seven rows of diagrams, a gap, three lyric rows, status
+  const TAB = 2
+  const RULER = TAB + 6
+  const LANE = RULER + 1
+  const DIAG = LANE + 2
+  const LYR = DIAG + 8
+  const statusRow = Math.min(rows - 1, LYR + 3)
+
+  for (let i = 0; i < 6; i++) {
+    put(0, TAB + i, { g: STRING_LABELS[i] ?? '?', dim: true })
+    put(1, TAB + i, { g: '|', dim: true })
+    for (let x = LABEL; x < columns; x++) put(x, TAB + i, { g: '─', dim: true })
+  }
+  for (let x = LABEL; x < columns; x++) put(x, LANE, { g: '─', dim: true })
+  const firstBeat = Math.floor(beat - NOW / CPB) - 1
+  const lastBeat = Math.ceil(beat + (laneCols - NOW) / CPB) + 1
+  for (let b = Math.max(0, firstBeat); b <= lastBeat; b++) {
+    const x = xOf(b)
+    if (x < LABEL || x >= columns) continue
+    const isBar = b % song.beatsPerBar === 0
+    if (isBar) { for (let i = 0; i < 6; i++) put(x, TAB + i, { g: '┊', dim: true }); put(x, LANE, { g: '┊', dim: true }) }
+    put(x, RULER, isBar ? { g: String(b / song.beatsPerBar + 1), dim: true } : { g: '·', dim: true })
+  }
+  for (let i = 0; i < 6; i++) put(LABEL + NOW, TAB + i, { g: '│', c: 'yellow' })
+  put(LABEL + NOW, RULER, { g: '▼', c: 'yellow' })
+  put(LABEL + NOW, LANE, { g: '│', c: 'yellow' })
+
+  // the current chord: the last one that started; the next: the one after it
+  let current: (typeof chords)[number] | undefined
+  let next: (typeof chords)[number] | undefined
+  for (const c of chords) {
+    if (c.beat <= beat) current = c
+    else { next = c; break }
+  }
+  if (!current) next = chords[0]
+
+  for (const c of chords) {
+    const x = xOf(c.beat)
+    const end = xOf(c.beat + c.len) - 1
+    if (end < LABEL || x >= columns) continue
+    const j = s.judge.judged.get(c.index)
+    const dtMs = (c.beat - beat) * mpb
+    const inWindow = dtMs >= -WINDOW.late && dtMs <= WINDOW.early
+    const color = j ? GRADE_COLOR[j.grade] : inWindow ? 'yellow' : c.beat < beat ? 'gray' : 'white'
+    const onNow = x <= LABEL + NOW && end >= LABEL + NOW
+    // the voicing as tab: frets stacked at the chord's beat, string 1 on top, again dimly at each later strum beat
+    for (let b = 0; b < c.len; b += 2) {
+      const sx = xOf(c.beat + b)
+      if (sx < LABEL || sx >= columns) continue
+      const first = b === 0
+      for (let i = 0; i < 6; i++) {
+        const f = c.frets[5 - i] ?? -1
+        const g = f < 0 ? 'x' : String(f)
+        for (let k = 0; k < g.length; k++) put(sx + k, TAB + i, { g: g[k] ?? ' ', c: color, bold: first && (c === current || inWindow), dim: !first && !j, inv: first && onNow && !j })
+      }
+    }
+    text(x, LANE, c.name.slice(0, Math.max(1, end - x + 1)), { c: color, bold: c === current || inWindow, inv: onNow && !j })
+    if (c.section && x >= LABEL) text(x, 1, c.section, { c: 'cyan', dim: true })
+  }
+  const heard = props.mic.on && props.mic.now?.chord && (props.mic.now.chordScore ?? 0) >= 0.75 ? props.mic.now.chord : undefined
+  if (heard) text(LABEL + NOW + 1, 1, `♪ ${heard}`, { c: 'magenta', bold: true })
+
+  // diagrams: the current chord at the left, the next beside it
+  const drawShape = (x0: number, c: (typeof chords)[number], title: string, style: Omit<Cell, 'g'>) => {
+    text(x0, DIAG, `${title} ${c.name}`, { ...style, bold: true })
+    const base = c.base
+    const mutes = c.frets.map(f => (f < 0 ? 'x' : f === 0 ? 'o' : ' ')).join(' ')
+    text(x0, DIAG + 1, mutes, { dim: true })
+    text(x0, DIAG + 2, base === 1 ? '┌─┬─┬─┬─┬─┐' : `${String(base).padStart(2)}fr`, { dim: true })
+    for (let r = 0; r < 4; r++) {
+      const fret = base + r
+      const row = c.frets.map(f => (f === fret ? '●' : '│')).join(' ')
+      text(x0, DIAG + 3 + r, row, { ...style })
+    }
+    text(x0, DIAG + 7, 'E A D G B e', { dim: true })
+  }
+  if (current) drawShape(LABEL, current, 'now:', { c: s.judge.judged.get(current.index) ? GRADE_COLOR[s.judge.judged.get(current.index)!.grade] : 'white' })
+  if (next) drawShape(LABEL + 18, next, 'next:', { c: 'cyan' })
+
+  // lyrics: the current line with the word being sung, the next line dim below
+  const lineOf = (line: number) => chords.filter(c => c.line === line)
+  const wordsOf = (line: number) => lineOf(line).flatMap(c => c.words.map(w => ({ at: c.beat + w.at, text: w.text })))
+  const curLine = current?.line ?? next?.line
+  if (curLine !== undefined) {
+    const words = wordsOf(curLine)
+    let x = LABEL
+    let activeIdx = -1
+    words.forEach((w, i) => { if (w.at <= beat) activeIdx = i })
+    for (let i = 0; i < words.length && x < columns; i++) {
+      const w = words[i]!
+      text(x, LYR + 1, w.text, i === activeIdx ? { c: 'yellow', bold: true, inv: true } : i < activeIdx ? { dim: true } : { c: 'white' })
+      x += w.text.length + 1
+    }
+    const after = chords.find(c => c.line > curLine)
+    if (after) {
+      const nextWords = wordsOf(after.line).map(w => w.text).join(' ')
+      text(LABEL, LYR + 2, nextWords.slice(0, columns - LABEL), { dim: true })
+    }
+    const before = [...chords].reverse().find(c => c.line < curLine)
+    if (before) text(LABEL, LYR, wordsOf(before.line).map(w => w.text).join(' ').slice(0, columns - LABEL), { dim: true })
+  }
+
+  const tally = s.judge.tally
+  const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
+  const header = `♪ ${song.title} · chords · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
+  const status = statusOf(s, props, elapsed, mpb)
+  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
+  lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
+  if (s.help && statusRow + 1 < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
+  return <Box flexDirection="column">{lines}</Box>
 }
 
 function tuner(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, columns: number) {
@@ -306,27 +472,12 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   const tally = s.judge.tally
   const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
   const header = `♪ ${song.title} · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
-  const micText = !props.mic.on ? 'mic off · space strums · m for mic'
-    : !props.mic.alive ? `mic starting… ${props.mic.message ?? ''}`.trim()
-    : heard ? `mic ● ${nameOf(heard.midi)} ${heard.cents >= 0 ? '+' : ''}${heard.cents}¢`
-    : props.mic.message && /exited|not start|stopped/.test(props.mic.message) ? `mic ✗ ${props.mic.message}` : 'mic ○'
-  let status: { text: string; color?: string } = { text: '' }
-  switch (s.mode) {
-    case 'idle': status = { text: `space or enter starts · ${micText} · t tuner · ? keys` }; break
-    case 'countin': status = { text: `count-in ${Math.max(1, Math.ceil(-elapsed / mpb))} · ${micText}`, color: 'yellow' }; break
-    case 'paused': status = { text: 'paused · p resumes · r restarts', color: 'yellow' }; break
-    case 'done': status = { text: `done · ${verdictOf(tally)} · ${tally.score} pts · ${accuracyOf(tally)}% · best combo ${tally.bestCombo} · enter plays again`, color: 'cyan' }; break
-    case 'playing': {
-      const j = s.last
-      const word = !j ? '…' : j.grade === 'wrong' ? `wrong note: heard ${j.heardMidi === undefined ? '?' : nameOf(j.heardMidi)}` : j.grade === 'miss' ? 'miss' : `${GRADE_WORD[j.grade]} ${j.dtMs === undefined ? '' : `(${j.dtMs > 0 ? '+' : ''}${j.dtMs}ms)`}`
-      status = { text: `${word} · ${micText}`, color: j ? GRADE_COLOR[j.grade] : undefined }
-    }
-  }
-  const help = 'enter/space start · space strum · p pause · r restart · +/- tempo · m mic · t tuner · ? hide · q close · esc back to prompt'
+  const status = statusOf(s, props, elapsed, mpb)
+  const help = HELP
 
   const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
-  if (s.help && helpRow < rows) lines.push(<Text dimColor wrap="truncate-end">{help}</Text>)
+  if (s.help && helpRow < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
   if (!showStaff) lines.push(<Text dimColor wrap="truncate-end">(staff hidden: the pane is too short · drag it taller or dock it)</Text>)
   return <Box flexDirection="column">{lines}</Box>
 }

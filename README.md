@@ -17,6 +17,9 @@ then, inside the session:
 ```
 /hero play ode        # a built-in song: /hero list shows them
 /hero play my.json    # your own (see songs/README.md)
+/hero search wonderwall           # look a song up on Ultimate Guitar
+/hero play #2                     # open a result: chords play as a chord sheet, tabs as notes
+/hero play https://tabs.ultimate-guitar.com/tab/...   # or paste a page's URL
 /hero tune            # the tuner
 /hero mic on          # start listening (ffmpeg; macOS asks once for microphone access)
 /hero latency 80      # if hits read late: how many ms behind the listener hears you
@@ -55,6 +58,25 @@ PERFECT (+12ms) · mic ● E3 +4¢
 Notes turn green when hit (bright for a perfect), yellow for a loose hit, magenta
 for a wrong pitch, red for a miss. The magenta diamond on the staff is the pitch
 the microphone hears right now.
+
+## Chord sheets
+
+A chords page (or a JSON file with `"kind": "chords"`) opens in chord mode: the
+chord names scroll along a lane past the now-marker, the current and the next
+shape are drawn as diagrams, and the words of the current line light up as they
+are sung, the next line dim below. Each chord lasts one bar unless the file says
+otherwise (`/hero import beats 2` halves that for the next import). The tempo
+comes from the page's strumming pattern when it has one, else 90 bpm; `+`/`-`
+change it while you play.
+
+Strums are judged by chroma: the listener measures how much energy each pitch
+class carries and compares it with the chord's template, so an Am strum counts
+for Am and not for C, even though they share two notes. Without the microphone,
+space strums.
+
+Ultimate Guitar pages are fetched as your browser would and cached in the plugin
+store. They are for your own practice; the site's terms apply to what you do with
+them.
 
 ## The listener
 

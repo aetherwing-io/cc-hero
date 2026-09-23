@@ -93,6 +93,28 @@ Every finished run is recorded in the plugin store: score, accuracy, timing
 offsets, and which chords or notes were missed. The coach and the lesson planner
 get that data as text through the session's own model access, nothing else.
 
+## Settings
+
+```
+/hero config                       # every setting with its value
+/hero config latency 60            # set one; /hero config reset puts the defaults back
+```
+
+| key       | what                                                              | default   |
+| --------- | ----------------------------------------------------------------- | --------- |
+| `device`  | the audio input the listener opens (`/hero mic devices` lists them) | `0`       |
+| `latency` | how late the listener hears you, in ms, subtracted from every note | `0`       |
+| `beats`   | beats a chord lasts on an imported chord sheet                    | `4`       |
+| `steps`   | tab columns per beat on an imported tab page                      | `4`       |
+| `bpm`     | tempo for an imported page that names none                        | `90`      |
+| `strum`   | the strumming pattern a progression exercise starts with          | `D DU UDU` |
+| `coach`   | the model the coach and the lesson planner use                    | `sonnet`  |
+| `rows`    | rows the pane asks for when it opens above the prompt             | `28`      |
+
+Settings live in Claude Code's plugin configuration, so they persist across
+sessions and also show up under the plugin in `/config`; `/hero latency`,
+`/hero import` and `/hero mic device` write the same rows.
+
 ## Chord sheets
 
 A chords page (or a JSON file with `"kind": "chords"`) opens in chord mode: the

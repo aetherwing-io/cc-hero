@@ -10,10 +10,10 @@ import { parseChord } from './music/chords.ts'
 import { cagedSong, fingerpickSong, parseKey, PICK_PATTERNS, progressionSong, PROGRESSIONS, randomOf, rootName, scaleSong, SCALES, type Key } from './music/exercise.ts'
 import { chordLengthOf, isChordSong, lengthOf, parseSong, parseStrumText, place, placeChords, placeStrums, STARTERS, strumText, type AnySong, type PlacedChord, type PlacedNote, type StrumTarget } from './music/song.ts'
 import { coachNotes, weakSpots, whenOf, withRun, type RunRecord } from './music/stats.ts'
-import { DEFAULT_IMPORT, searchResultsOf, songOfPage, tabPageOf, type ImportOptions, type UgResult } from './ug/parse.ts'
+import { searchResultsOf, songOfPage, tabPageOf, type ImportOptions, type UgResult } from './ug/parse.ts'
+import { DEFAULTS, FIELDS, fieldOf, parseSetting, settingsOf, settingsText, type SettingKey, type Settings } from './settings.ts'
 
 const PANE = 'hero'
-const PANE_ROWS = 28
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
 const USAGE = [
@@ -35,7 +35,8 @@ const USAGE = [
   '  /hero stats                                recent runs and weak spots',
   '  /hero coach                                what Claude makes of your last run',
   '  /hero lesson <what you want to work on>    a plan of drills with goals; /hero next moves on',
-  '  /hero import beats|steps|bpm <n> · /hero stop',
+  '  /hero config [key value | reset]        settings, kept across sessions: device, latency, beats, steps, bpm, strum, coach, rows',
+  '  /hero stop',
   '',
   'in the pane (click it first): enter starts · space strums · p pause · r restart · +/- tempo · m mic · t tuner · ? keys · esc back',
 ].join('\n')
@@ -50,7 +51,8 @@ let paneOpen = false
 let lastSearch: UgResult[] = []
 let lastQuery = ''
 let busy: string | undefined
-let importOptions: ImportOptions = { ...DEFAULT_IMPORT }
+let settings: Settings = { ...DEFAULTS }
+const importOptions = (): ImportOptions => ({ beatsPerChord: settings.beats, stepsPerBeat: settings.steps, bpm: settings.bpm })
 let runs: RunRecord[] = []
 let lesson: Lesson | undefined
 let lastCoach: string | undefined
@@ -60,10 +62,8 @@ let micWanted = false
 let micState: MicState | undefined
 let micMessage: string | undefined
 let micStop: (() => void) | undefined
-let micDevice = '0'
 let pendingLead: number | undefined
 let startAt: number | undefined
-let latencyMs = 0
 
 const micProps = (nowMs: number): MicProps => {
   const alive = micState !== undefined && micState.error === undefined && nowMs - micState.t < STALE_MS
@@ -73,7 +73,7 @@ const micProps = (nowMs: number): MicProps => {
     alive,
     ...(message ? { message } : {}),
     now: alive ? micState!.now : null,
-    onsets: alive ? micState!.onsets.map(o => (latencyMs ? { ...o, t: o.t - latencyMs } : o)) : [],
+    onsets: alive ? micState!.onsets.map(o => (settings.latency ? { ...o, t: o.t - settings.latency } : o)) : [],
   }
 }
 
@@ -109,18 +109,29 @@ const boardProps = (nowMs: number): BoardProps => ({
   ...(view === 'stats' ? { stats: { runs: runs.slice(0, 12).map(r => summaryOf(r, nowMs)), weak: weakSpots(runs, loaded?.key), ...(lessonLine() ? { lesson: lessonLine()! } : {}) } } : {}),
 })
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // settings: plugin.json's userConfig fields, as Claude Code keeps them between sessions
+  settings = settingsOf(options)
+
+  // the person changing a row in /config
+  on('config.set', async ($, e, next) => {
+    const r = await next(e)
+    const field = FIELDS.find(f => e.key === `cc-hero.${f.field}`)
+    if (field && !r.deny) {
+      const parsed = parseSetting(field.key, r.value)
+      if ('value' in parsed) applySetting($, field.key, parsed.value)
+    }
+    return r
+  })
+
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     const get = async (key: string) => $.store.get(key).catch(() => undefined)
     const stored = await get('best')
     if (typeof stored === 'object' && stored !== null) best = { ...(stored as Record<string, number>) }
-    const lat = await get('latency')
-    if (typeof lat === 'number') latencyMs = lat
-    const imp = await get('import')
-    if (typeof imp === 'object' && imp !== null) importOptions = { ...importOptions, ...(imp as Partial<ImportOptions>) }
-    const dev = await get('device')
-    if (typeof dev === 'string' && dev) micDevice = dev
+    // settings saved by an earlier build in the store, where the manifest's rows are still at their defaults
+    const legacy = await get('settings')
+    if (typeof legacy === 'object' && legacy !== null) settings = settingsOf(legacy as Record<string, unknown>, settings)
     const rs = await get('runs')
     if (Array.isArray(rs)) runs = rs.filter((x): x is RunRecord => typeof x === 'object' && x !== null && typeof (x as RunRecord).accuracy === 'number')
     const ls = await get('lesson')
@@ -215,7 +226,7 @@ export const register: Register = on => {
     }
     const { Client } = $.ui.resolve(e)
     const columns = e.props.bodyColumns
-    const rows = e.props.placement === 'dock' ? Math.max(12, (e.viewport?.rows ?? 30) - 3) : PANE_ROWS
+    const rows = e.props.placement === 'dock' ? Math.max(12, (e.viewport?.rows ?? 30) - 3) : settings.rows
     return <Client key="hero" module="./board/hero.tsx" width={columns} height={rows} props={boardProps(Date.now())} />
   })
 }
@@ -223,12 +234,31 @@ export const register: Register = on => {
 // ---- commands ----
 
 async function openPane($: EngineInterface) {
-  await $.ui.open({ id: PANE, title: 'cc-hero', focus: true, rows: PANE_ROWS })
+  await $.ui.open({ id: PANE, title: 'cc-hero', focus: true, rows: settings.rows })
   paneOpen = true
   $.ui.invalidate('ui.render')
   // the focus a command's own open asks for is refused while the command is still
   // running; ask again once the prompt is idle so enter starts the song at once
-  $.clock.after(400, () => { void $.ui.open({ id: PANE, title: 'cc-hero', focus: true, rows: PANE_ROWS }).catch(() => undefined) })
+  $.clock.after(400, () => { void $.ui.open({ id: PANE, title: 'cc-hero', focus: true, rows: settings.rows }).catch(() => undefined) })
+}
+
+/** Takes a setting's new value: into this module now, into Claude Code's plugin config for next time. */
+function applySetting($: EngineInterface, key: SettingKey, value: Settings[SettingKey]) {
+  const before = settings[key]
+  ;(settings as Record<string, unknown>)[key] = value
+  if (key === 'device' && micWanted && before !== value) { stopMic(); startMic($) }
+}
+
+async function saveSetting($: EngineInterface, key: SettingKey, value: Settings[SettingKey]): Promise<string> {
+  applySetting($, key, value)
+  // the store copy serves a build whose manifest lacks the row, and a config write that is refused
+  await $.store.set('settings', { ...(await $.store.get('settings').catch(() => ({})) as object), [fieldOf(key).field]: value }).catch(() => undefined)
+  try {
+    const r = await $.config.set({ key: `cc-hero.${fieldOf(key).field}`, value })
+    return r.deny ? ` (kept for this session; the config row refused: ${r.deny})` : ''
+  } catch {
+    return ' (kept in the plugin store; no config row for it in this build)'
+  }
 }
 
 const describe = (l: Loaded): string => {
@@ -290,13 +320,28 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
     }
     case 'import': {
       const [what = '', value = ''] = arg.split(/\s+/)
-      const n = Number(value)
-      const key = what === 'beats' ? 'beatsPerChord' : what === 'steps' ? 'stepsPerBeat' : what === 'bpm' ? 'bpm' : undefined
-      if (!key) return { text: `import: beats per chord ${importOptions.beatsPerChord} · tab columns per beat ${importOptions.stepsPerBeat} · default bpm ${importOptions.bpm} · /hero import beats|steps|bpm <n>` }
-      if (!Number.isFinite(n) || n <= 0) return { text: `cc-hero: /hero import ${what} <number>` }
-      importOptions = { ...importOptions, [key]: n }
-      await $.store.set('import', importOptions).catch(() => undefined)
-      return { text: `import ${what} set to ${n} · reload the song with /hero play to apply` }
+      if (what !== 'beats' && what !== 'steps' && what !== 'bpm') return { text: `import: beats per chord ${settings.beats} · tab columns per beat ${settings.steps} · default bpm ${settings.bpm} · /hero import beats|steps|bpm <n>` }
+      const r = await runHero($, `config ${what} ${value}`, quiet)
+      return { text: `${r.text} · reload the song with /hero play to apply` }
+    }
+    case 'config':
+    case 'settings': {
+      const [what = '', ...vals] = arg.split(/\s+/)
+      if (!what) return { text: `settings (kept across sessions; also under cc-hero in /config)\n${settingsText(settings)}\n/hero config <key> <value> sets one · /hero config reset` }
+      if (what === 'reset') {
+        const notes: string[] = []
+        for (const f of FIELDS) notes.push(await saveSetting($, f.key, DEFAULTS[f.key]))
+        return { text: `settings back to their defaults${notes.find(n => n) ?? ''}` }
+      }
+      const key = FIELDS.find(f => f.key === what.toLowerCase())?.key
+      if (!key) return { text: `cc-hero: no setting "${what}" · ${FIELDS.map(f => f.key).join(', ')}` }
+      const value = vals.join(' ')
+      if (!value) return { text: `${key}: ${settings[key]} · ${fieldOf(key).help}` }
+      if (key === 'strum' && !parseStrumText(value.replace(/^"|"$/g, ''))) return { text: 'cc-hero: a pattern is beats separated by spaces, each beat D, U, X (muted), x or - (rest)' }
+      const parsed = parseSetting(key, value.replace(/^"|"$/g, ''))
+      if ('error' in parsed) return { text: `cc-hero: ${parsed.error}` }
+      const note = await saveSetting($, key, parsed.value)
+      return { text: `${key} set to ${parsed.value}${note}` }
     }
     case 'progression':
     case 'prog':
@@ -305,7 +350,7 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
     case 'caged':
     case 'drill': {
       try {
-        const built = buildExercise(verb.toLowerCase(), rest)
+        const built = buildExercise(verb.toLowerCase(), rest, Math.random, settings.strum)
         return show(placedOf(`ex:${built.cmd}`, built.song), built.hint)
       } catch (err) {
         return { text: `cc-hero: ${err instanceof Error ? err.message : String(err)}` }
@@ -333,14 +378,9 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
       return { text: 'tuner open · play one string · t goes back to the song' }
     case 'mic':
       return micCommand($, arg)
-    case 'latency': {
-      const ms = Number(arg)
-      if (!arg) return { text: `mic latency offset: ${latencyMs} ms · /hero latency <ms> sets it (how late the listener hears you; try 60-120)` }
-      if (!Number.isFinite(ms) || ms < -500 || ms > 1000) return { text: 'cc-hero: latency is a number of milliseconds between -500 and 1000' }
-      latencyMs = Math.round(ms)
-      await $.store.set('latency', latencyMs).catch(() => undefined)
-      return { text: `mic latency offset set to ${latencyMs} ms` }
-    }
+    case 'latency':
+      if (!arg) return { text: `mic latency offset: ${settings.latency} ms · /hero latency <ms> sets it (how late the listener hears you; try 60-120)` }
+      return runHero($, `config latency ${arg}`, quiet)
     case 'stats': {
       view = 'stats'
       await openPane($)
@@ -385,7 +425,7 @@ const progressionTokens = (tokens: string[]): string[] => {
 }
 
 /** Builds an exercise from a verb and its words; throws with a reason a person can act on. */
-export function buildExercise(verb: string, words: string[], rand = Math.random): { cmd: string; song: AnySong; hint: string } {
+export function buildExercise(verb: string, words: string[], rand = Math.random, defaultStrum = DEFAULTS.strum): { cmd: string; song: AnySong; hint: string } {
   const opts: Record<string, number> = {}
   const plain: string[] = []
   for (let i = 0; i < words.length; i++) {
@@ -398,16 +438,16 @@ export function buildExercise(verb: string, words: string[], rand = Math.random)
   if (verb === 'drill') {
     const key = plain[0] && parseKey(plain[0]) ? plain[0]! : randomOf(['G', 'C', 'D', 'A', 'E', 'Am', 'Em'], rand)
     const kind = randomOf(['progression', 'pick', 'scale', 'caged'] as const, rand)
-    if (kind === 'progression') return buildExercise('progression', [key, randomOf(Object.keys(PROGRESSIONS), rand)], rand)
-    if (kind === 'pick') return buildExercise('pick', [randomOf(Object.keys(PICK_PATTERNS), rand), key, randomOf(Object.keys(PROGRESSIONS), rand)], rand)
-    if (kind === 'scale') return buildExercise('scale', [randomOf(['pentatonic', 'major', 'minor', 'blues'], rand), key.replace(/m$/, ''), String(1 + Math.floor(rand() * 5))], rand)
-    return buildExercise('caged', [key], rand)
+    if (kind === 'progression') return buildExercise('progression', [key, randomOf(Object.keys(PROGRESSIONS), rand)], rand, defaultStrum)
+    if (kind === 'pick') return buildExercise('pick', [randomOf(Object.keys(PICK_PATTERNS), rand), key, randomOf(Object.keys(PROGRESSIONS), rand)], rand, defaultStrum)
+    if (kind === 'scale') return buildExercise('scale', [randomOf(['pentatonic', 'major', 'minor', 'blues'], rand), key.replace(/m$/, ''), String(1 + Math.floor(rand() * 5))], rand, defaultStrum)
+    return buildExercise('caged', [key], rand, defaultStrum)
   }
   if (verb === 'progression' || verb === 'prog') {
     const { key, used } = keyOrDefault(plain[0])
     const tokens = progressionTokens(used ? plain.slice(1) : plain)
     const song = progressionSong(key, tokens, { beatsPerChord: opts.beats ?? 4, repeats: repeats ?? 2, bpm: bpm ?? 80 })
-    if (opts.strum === undefined) song.strum = parseStrumText('D DU UDU')!
+    if (opts.strum === undefined) song.strum = parseStrumText(defaultStrum) ?? parseStrumText(DEFAULTS.strum)!
     return { cmd: `progression ${key.name} ${tokens.join(' ')}${optText(opts)}`, song, hint: `strum ${strumText(song.strum!)} · /hero strum changes the pattern` }
   }
   if (verb === 'pick') {
@@ -473,7 +513,7 @@ async function load($: EngineInterface, name: string): Promise<Omit<Loaded, 'cmd
     }
     const page = tabPageOf(await fetchText($, name))
     if (!page) throw new Error('that page has no tab in it (is it an Ultimate Guitar tab or chords page?)')
-    const song = songOfPage(page, importOptions)
+    const song = songOfPage(page, importOptions())
     await $.store.set(key, song).catch(() => undefined)
     return placedOf(key, song)
   }
@@ -489,23 +529,21 @@ async function load($: EngineInterface, name: string): Promise<Omit<Loaded, 'cmd
 
 async function micCommand($: EngineInterface, arg: string): Promise<{ text: string }> {
   const what = arg.toLowerCase()
-  if (what === 'on') { startMic($); $.ui.invalidate('ui.render'); return { text: `microphone listener starting on device ${micDevice} (ffmpeg; macOS asks once for microphone access)` } }
+  if (what === 'on') { startMic($); $.ui.invalidate('ui.render'); return { text: `microphone listener starting on device ${settings.device} (ffmpeg; macOS asks once for microphone access)` } }
   if (what === 'off') { stopMic(); $.ui.invalidate('ui.render'); return { text: 'microphone listener stopped' } }
   if (what === 'devices') {
     const devices = await listDevices($)
     if (devices.length === 0) return { text: 'cc-hero: no audio input devices found (is ffmpeg installed?)' }
-    return { text: [...devices.map(d => `${d.index === micDevice ? '▶' : ' '} ${d.index}: ${d.name}`), '', '/hero mic device <number or name> picks one (a USB guitar interface shows up here once plugged in)'].join('\n') }
+    return { text: [...devices.map(d => `${d.index === settings.device ? '▶' : ' '} ${d.index}: ${d.name}`), '', '/hero mic device <number or name> picks one (a USB guitar interface shows up here once plugged in)'].join('\n') }
   }
   if (what.startsWith('device')) {
     const want = arg.slice(6).trim()
-    if (!want) return { text: `mic device: ${micDevice} · /hero mic devices lists them` }
+    if (!want) return { text: `mic device: ${settings.device} · /hero mic devices lists them` }
     const devices = await listDevices($)
     const found = devices.find(d => d.index === want) ?? devices.find(d => d.name.toLowerCase().includes(want.toLowerCase()))
-    micDevice = found?.index ?? want
-    await $.store.set('device', micDevice).catch(() => undefined)
     const wasOn = micWanted
-    if (wasOn) { stopMic(); startMic($) }
-    return { text: `mic device set to ${micDevice}${found ? ` (${found.name})` : ' (not in the device list; trying anyway)'}${wasOn ? ' · listener restarted' : ''}` }
+    const note = await saveSetting($, 'device', found?.index ?? want)
+    return { text: `mic device set to ${settings.device}${found ? ` (${found.name})` : ' (not in the device list; trying anyway)'}${wasOn ? ' · listener restarted' : ''}${note}` }
   }
   if (what.startsWith('file ')) {
     // /hero mic file <path> [lead seconds]: with a lead, the song starts itself so that
@@ -523,7 +561,7 @@ async function micCommand($: EngineInterface, arg: string): Promise<{ text: stri
   }
   const m = micProps(Date.now())
   const sync = startAt !== undefined ? ` · beat 0 at ${new Date(startAt).toISOString().slice(11, 23)}` : pendingLead !== undefined ? ` · waiting for audio to start (lead ${pendingLead}s)` : ''
-  return { text: `mic ${m.on ? (m.alive ? 'on · listening' : 'on · not alive yet') : 'off'} · device ${micDevice}${m.message ? ` · ${m.message}` : ''}${m.now ? ` · hearing ${m.now.midi >= 0 ? `midi ${m.now.midi} (${m.now.hz} Hz)` : 'a strum'}${m.now.chord ? `, chord ${m.now.chord}` : ''}` : ''}${sync} · latency ${latencyMs} ms` }
+  return { text: `mic ${m.on ? (m.alive ? 'on · listening' : 'on · not alive yet') : 'off'} · device ${settings.device}${m.message ? ` · ${m.message}` : ''}${m.now ? ` · hearing ${m.now.midi >= 0 ? `midi ${m.now.midi} (${m.now.hz} Hz)` : 'a strum'}${m.now.chord ? `, chord ${m.now.chord}` : ''}` : ''}${sync} · latency ${settings.latency} ms` }
 }
 
 /** Audio input devices as ffmpeg lists them on this platform. */
@@ -554,7 +592,7 @@ function startMic($: EngineInterface, input?: string) {
   micMessage = 'starting the listener…'
   const root = $.plugin.root
   const script = `${root}/listen/listen.ts`
-  const extra = input ? ['--input', input] : ['--device', micDevice]
+  const extra = input ? ['--input', input] : ['--device', settings.device]
   const runtimes = [['bun', script, '--out', '-', ...extra], ['node', script, '--out', '-', ...extra]]
   void (async () => {
     for (const argv of runtimes) {
@@ -613,7 +651,7 @@ async function coach($: EngineInterface): Promise<{ text: string }> {
   if (runs.length === 0) return { text: 'cc-hero: no runs yet · play something through, then /hero coach' }
   const notes = coachNotes(runs, loaded?.key, Date.now())
   const song = loaded ? `Current song: "${loaded.song.title}" (${isChordSong(loaded.song) ? `chords: ${[...new Set(loaded.chords.map(c => c.name))].join(' ')}` : `${loaded.notes.length} notes`}) at ${loaded.song.bpm} bpm.` : ''
-  const r = await $.model.complete({ model: 'sonnet', system: COACH_SYSTEM, prompt: `${song}\n${notes}`, maxTokens: 400, effort: 'low', timeoutMs: 60000 })
+  const r = await $.model.complete({ model: settings.coach, system: COACH_SYSTEM, prompt: `${song}\n${notes}`, maxTokens: 400, effort: 'low', timeoutMs: 60000 })
   if (!r.isAnswered) return { text: `cc-hero: the coach did not answer (${r.reason})` }
   lastCoach = r.text.trim()
   return { text: `coach:\n${lastCoach}` }
@@ -629,7 +667,7 @@ async function lessonCommand($: EngineInterface, arg: string): Promise<{ text: s
   }
   if (arg === 'stop' || arg === 'off') { lesson = undefined; await $.store.delete('lesson').catch(() => undefined); return { text: 'lesson ended' } }
   const history = runs.length ? coachNotes(runs, undefined, Date.now()) : 'No runs recorded yet.'
-  const r = await $.model.complete({ model: 'sonnet', system: LESSON_SYSTEM, prompt: `The player wants to work on: ${arg}\n\nTheir recent history:\n${history}`, maxTokens: 800, effort: 'low', timeoutMs: 60000 })
+  const r = await $.model.complete({ model: settings.coach, system: LESSON_SYSTEM, prompt: `The player wants to work on: ${arg}\n\nTheir recent history:\n${history}`, maxTokens: 800, effort: 'low', timeoutMs: 60000 })
   if (!r.isAnswered) return { text: `cc-hero: no plan came back (${r.reason})` }
   const m = /\{[\s\S]*\}/.exec(r.text)
   let plan: { title?: unknown; steps?: unknown }

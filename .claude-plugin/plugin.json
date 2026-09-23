@@ -2,7 +2,80 @@
   "name": "cc-hero",
   "version": "0.1.0",
   "description": "Guitar practice in a pane beside Claude Code: /hero scrolls a song past a now-marker as tablature and standard notation, Guitar Hero style, and scores what you play. With the microphone listener on (bun + ffmpeg, started by /hero mic on) it hears the guitar, judges each note's pitch and timing, and doubles as a tuner (/hero tune). Without it, space strums for timing practice. Needs function hooks (early access) and an interactive terminal.",
-  "author": { "name": "Scott Meyer" },
+  "author": {
+    "name": "Scott Meyer"
+  },
   "license": "MIT",
-  "keywords": ["guitar", "music", "tablature", "sheet-music", "tuner", "practice", "function-hooks"]
+  "keywords": [
+    "guitar",
+    "music",
+    "tablature",
+    "sheet-music",
+    "tuner",
+    "practice",
+    "function-hooks"
+  ],
+  "userConfig": {
+    "micDevice": {
+      "type": "string",
+      "title": "Mic device",
+      "description": "The audio input the listener opens: an index or a name from /hero mic devices. A USB guitar interface shows up there.",
+      "required": false,
+      "default": "0"
+    },
+    "latencyMs": {
+      "type": "number",
+      "title": "Mic latency (ms)",
+      "description": "How late the listener hears you, in milliseconds; subtracted from every note it reports. Try 50-120 if hits read late.",
+      "required": false,
+      "default": 0
+    },
+    "beatsPerChord": {
+      "type": "number",
+      "title": "Beats per chord",
+      "description": "How many beats a chord lasts on an imported chord sheet.",
+      "required": false,
+      "default": 4
+    },
+    "stepsPerBeat": {
+      "type": "number",
+      "title": "Tab columns per beat",
+      "description": "How an imported ASCII tab reads its dashes: 4 makes each column a sixteenth.",
+      "required": false,
+      "default": 4
+    },
+    "importBpm": {
+      "type": "number",
+      "title": "Import tempo",
+      "description": "Tempo for an imported page that names none.",
+      "required": false,
+      "default": 90
+    },
+    "defaultStrum": {
+      "type": "string",
+      "title": "Default strum",
+      "description": "The strumming pattern a progression exercise starts with: D, U, X (muted), - (rest), one token a beat.",
+      "required": false,
+      "default": "D DU UDU"
+    },
+    "coachModel": {
+      "type": "string",
+      "title": "Coach model",
+      "description": "The model /hero coach and /hero lesson use.",
+      "required": false,
+      "default": "sonnet",
+      "options": [
+        "sonnet",
+        "haiku",
+        "opus"
+      ]
+    },
+    "paneRows": {
+      "type": "number",
+      "title": "Pane rows",
+      "description": "Rows the pane asks for when it opens above the prompt (a docked pane takes the height it has).",
+      "required": false,
+      "default": 28
+    }
+  }
 }

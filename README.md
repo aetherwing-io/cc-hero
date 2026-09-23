@@ -1,18 +1,62 @@
+<p align="center">
+  <img src="assets/readme-banner.png" alt="cc-hero — Claude codes. You shred. Guitar practice inside Claude Code, illustrated with scrolling tablature and a glowing playhead." width="100%">
+</p>
+
 # cc-hero
+
+**Claude codes. You shred.**
 
 Guitar practice in a Claude Code pane. `/hero` scrolls a song past a now-marker
 as tablature and standard notation, Guitar Hero style, and scores what you play.
 With the microphone listener on it hears the guitar, judges each note's pitch and
 timing, and doubles as a tuner. Without it, the space bar strums for timing practice.
 
-A Claude Code **mod** (a plugin whose behaviour is a function-hooks module), so it
-needs the early-access flag:
+[Get playing](#get-playing) · [See the pane](#what-you-see) · [Exercises](#exercises) · [Coach & progress](#progress-and-the-coach) · [Settings](#settings)
+
+- **Chase a perfect run.** Scrolling tabs and notation, pitch and timing scores, and combos.
+- **Bring your guitar.** Play through a microphone or USB interface, with a tuner built in.
+- **Find your next riff.** Built-in songs, Ultimate Guitar search, and your own song files.
+- **Practice with a purpose.** Scales, chord changes, fingerpicking, and coaching based on your runs.
+
+## Get playing
+
+### You need
+
+- **Claude Code 2.1.280 or newer**, with function hooks turned on (they are early
+  access): `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment of the `claude`
+  you start. Put `export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in your shell profile
+  to stop typing it.
+- **ffmpeg** and **bun** (or node 22+) for the microphone listener:
+  `brew install ffmpeg` and `brew install oven-sh/bun/bun` on a Mac. Without them
+  everything but the mic and the tuner still works; the space bar strums.
+- A terminal at least 40 columns wide; 110 or more docks the pane beside the transcript.
+
+### Install
+
+As a plugin, so it loads in every session:
 
 ```sh
-CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir /path/to/cc-hero
+claude plugin marketplace add aetherwing-io/cc-hero
+claude plugin install cc-hero@cc-hero
 ```
 
-then, inside the session:
+or straight from a checkout, which also picks up your edits as you make them:
+
+```sh
+git clone https://github.com/aetherwing-io/cc-hero.git
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir ./cc-hero
+```
+
+### Check it loaded
+
+Inside the session, `/hero` prints the command list and `/hero list` the built-in
+songs. If `/hero` is not a command, the flag was not set for that `claude`
+(`echo $CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` should print `1`), or the plugin is
+not enabled (`claude plugin list`). Update with `claude plugin marketplace update cc-hero`.
+
+### Play
+
+Start `claude` (with the flag), then, inside the session:
 
 ```
 /hero play ode        # a built-in song: /hero list shows them
@@ -28,7 +72,8 @@ then, inside the session:
 
 Use fullscreen rendering (`/tui fullscreen` once, or `CLAUDE_CODE_NO_FLICKER=1`):
 it captures the mouse so you can click the pane, and in a terminal 110 columns
-or wider it docks the pane beside the transcript, floor to ceiling.
+or wider it docks the pane beside the transcript, floor to ceiling. Inside tmux,
+add `set -g mouse on` to `~/.tmux.conf` for the mouse to reach the pane.
 
 After a search, click the pane and pick a result with **↑**/**↓** (or j/k), **enter**
 to open it, a digit to jump, **t** to go back to the song.
@@ -112,8 +157,10 @@ get that data as text through the session's own model access, nothing else.
 | `rows`    | rows the pane asks for when it opens above the prompt             | `28`      |
 
 Settings live in Claude Code's plugin configuration, so they persist across
-sessions and also show up under the plugin in `/config`; `/hero latency`,
-`/hero import` and `/hero mic device` write the same rows.
+sessions and also show up under the plugin in `/config` and in
+`/plugin configure cc-hero@cc-hero` (the install's "options not yet set" note
+means the defaults apply); `/hero latency`, `/hero import` and
+`/hero mic device` write the same rows.
 
 ## Chord sheets
 
@@ -165,11 +212,16 @@ you start the song yourself with enter.
 ## Development
 
 ```sh
-claude -p '/plugin-types'                     # writes .claude/types/ (the API contract)
+git clone https://github.com/aetherwing-io/cc-hero.git && cd cc-hero
+claude -p '/plugin-types'                     # writes .claude/types/ (the API contract; gitignored)
 bunx tsc -p tsconfig.json                     # typecheck hooks and tests
 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .
 claude plugin validate .
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .   # run it; a save of a hooks file reloads the plugin
 ```
+
+To try the marketplace install from a checkout instead of GitHub:
+`claude plugin marketplace add /path/to/cc-hero` then `claude plugin install cc-hero@cc-hero`.
 
 Layout: `hooks/register.tsx` is the hooks module (the `/hero` command, the pane,
 the listener's lifecycle, best scores in `$.store`); `hooks/board/hero.tsx` is

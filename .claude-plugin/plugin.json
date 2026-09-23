@@ -5,6 +5,8 @@
   "author": {
     "name": "Scott Meyer"
   },
+  "homepage": "https://github.com/aetherwing-io/cc-hero",
+  "repository": "https://github.com/aetherwing-io/cc-hero",
   "license": "MIT",
   "keywords": [
     "guitar",

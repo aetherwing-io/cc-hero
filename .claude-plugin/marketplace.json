@@ -1,0 +1,15 @@
+{
+  "name": "cc-hero",
+  "owner": { "name": "Aetherwing" },
+  "metadata": { "description": "cc-hero: guitar practice inside Claude Code" },
+  "plugins": [
+    {
+      "name": "cc-hero",
+      "source": "./",
+      "description": "Guitar practice in a Claude Code pane: songs and chord sheets scroll past a now-marker as tablature and notation, scored from the microphone or a USB guitar interface; Ultimate Guitar search, fingerpicking, scales, CAGED, strumming patterns, a tuner, run history and a coach. Needs function hooks (early access): CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1.",
+      "homepage": "https://github.com/aetherwing-io/cc-hero",
+      "repository": "https://github.com/aetherwing-io/cc-hero",
+      "license": "MIT"
+    }
+  ]
+}

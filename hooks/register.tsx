@@ -141,7 +141,7 @@ export const register: Register = (on, options) => {
       description: 'Guitar practice: songs, chord sheets and exercises scrolling past a now-marker, scored from the microphone (cc-hero)',
       argumentHint: '[play | search | progression | pick | scale | caged | drill | strum | tune | mic | stats | coach | lesson | stop]',
       immediate: true,
-    }).catch(err => $.ui.log(`cc-hero: /hero not registered: ${err}`))
+    }).catch(err => $.ui.log(`/hero not registered: ${err}`))
     return r
   })
 
@@ -177,9 +177,9 @@ export const register: Register = (on, options) => {
         try {
           await setLoaded($, await load($, r.url), `play ${r.url}`)
           view = 'play'
-          $.ui.toast(`cc-hero: ♪ ${loaded!.song.title}${loaded!.song.artist ? ` · ${loaded!.song.artist}` : ''} · enter starts`)
+          $.ui.toast(`♪ ${loaded!.song.title}${loaded!.song.artist ? ` · ${loaded!.song.artist}` : ''} · enter starts`)
         } catch (err) {
-          $.ui.toast(`cc-hero: ${err instanceof Error ? err.message : String(err)}`)
+          $.ui.toast(`${err instanceof Error ? err.message : String(err)}`)
         }
         busy = undefined
         break
@@ -189,7 +189,7 @@ export const register: Register = (on, options) => {
         const prev = best[post.songKey] ?? 0
         if (post.score > prev) {
           best[post.songKey] = post.score
-          await $.store.set('best', best).catch(err => $.ui.log(`cc-hero: store write failed: ${err}`))
+          await $.store.set('best', best).catch(err => $.ui.log(`store write failed: ${err}`))
         }
         const record: RunRecord = { key: post.songKey, title: post.title, at: nowMs, bpm: loaded?.song.bpm ?? 0, tempo: post.tempo, score: post.score, accuracy: post.accuracy, bestCombo: post.bestCombo, grades: post.grades, hits: post.hits, misses: post.misses, timing: post.timing }
         runs = withRun(runs, record)
@@ -205,7 +205,7 @@ export const register: Register = (on, options) => {
           } else note += ` · goal ${step.goal}%: again, or /hero coach`
           await $.store.set('lesson', lesson).catch(() => undefined)
         }
-        $.ui.toast(`cc-hero: ${post.title} · ${post.accuracy}% · ${post.verdict} · ${note}`)
+        $.ui.toast(`${post.title} · ${post.accuracy}% · ${post.verdict} · ${note}`)
         break
       }
     }
@@ -299,7 +299,7 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
         const l = await load($, name)
         return show(l, 'click the pane, then enter starts (space strums without a mic; m turns the mic on)')
       } catch (err) {
-        return { text: `cc-hero: ${err instanceof Error ? err.message : String(err)}` }
+        return { text: `${err instanceof Error ? err.message : String(err)}` }
       }
     }
     case 'search': {
@@ -308,11 +308,11 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
       try {
         results = searchResultsOf(await fetchText($, `https://www.ultimate-guitar.com/search.php?search_type=title&value=${encodeURIComponent(arg)}`))
       } catch (err) {
-        return { text: `cc-hero: search failed: ${err instanceof Error ? err.message : String(err)}` }
+        return { text: `search failed: ${err instanceof Error ? err.message : String(err)}` }
       }
       lastSearch = results.slice(0, 15)
       lastQuery = arg
-      if (lastSearch.length === 0) return { text: `cc-hero: nothing on Ultimate Guitar for "${arg}" (chords and tabs only)` }
+      if (lastSearch.length === 0) return { text: `nothing on Ultimate Guitar for "${arg}" (chords and tabs only)` }
       view = 'search'
       await openPane($)
       const rows = lastSearch.map((r, i) => `${String(i + 1).padStart(2)}. ${r.type.padEnd(6)} ${r.song} · ${r.artist} · ${r.votes} votes${r.rating ? ` · ${r.rating.toFixed(1)}★` : ''}`)
@@ -334,12 +334,12 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
         return { text: `settings back to their defaults${notes.find(n => n) ?? ''}` }
       }
       const key = FIELDS.find(f => f.key === what.toLowerCase())?.key
-      if (!key) return { text: `cc-hero: no setting "${what}" · ${FIELDS.map(f => f.key).join(', ')}` }
+      if (!key) return { text: `no setting "${what}" · ${FIELDS.map(f => f.key).join(', ')}` }
       const value = vals.join(' ')
       if (!value) return { text: `${key}: ${settings[key]} · ${fieldOf(key).help}` }
-      if (key === 'strum' && !parseStrumText(value.replace(/^"|"$/g, ''))) return { text: 'cc-hero: a pattern is beats separated by spaces, each beat D, U, X (muted), x or - (rest)' }
+      if (key === 'strum' && !parseStrumText(value.replace(/^"|"$/g, ''))) return { text: 'a pattern is beats separated by spaces, each beat D, U, X (muted), x or - (rest)' }
       const parsed = parseSetting(key, value.replace(/^"|"$/g, ''))
-      if ('error' in parsed) return { text: `cc-hero: ${parsed.error}` }
+      if ('error' in parsed) return { text: `${parsed.error}` }
       const note = await saveSetting($, key, parsed.value)
       return { text: `${key} set to ${parsed.value}${note}` }
     }
@@ -353,17 +353,17 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
         const built = buildExercise(verb.toLowerCase(), rest, Math.random, settings.strum)
         return show(placedOf(`ex:${built.cmd}`, built.song), built.hint)
       } catch (err) {
-        return { text: `cc-hero: ${err instanceof Error ? err.message : String(err)}` }
+        return { text: `${err instanceof Error ? err.message : String(err)}` }
       }
     }
     case 'strum': {
-      if (!loaded || !isChordSong(loaded.song)) return { text: 'cc-hero: load a chord sheet first (/hero play <chords page>, /hero progression …)' }
+      if (!loaded || !isChordSong(loaded.song)) return { text: 'load a chord sheet first (/hero play <chords page>, /hero progression …)' }
       const song = loaded.song
       if (!arg) return { text: song.strum ? `strumming: ${strumText(song.strum)} · /hero strum <pattern> changes it, /hero strum off removes it` : 'no strumming pattern: one strum a chord · /hero strum "D DU UDU" sets one' }
       if (arg === 'off') delete song.strum
       else {
         const p = parseStrumText(arg.replace(/^"|"$/g, ''))
-        if (!p) return { text: 'cc-hero: a pattern is beats separated by spaces, each beat D, U, X (muted), x or - (rest): "D DU UDU", "D - DU -"' }
+        if (!p) return { text: 'a pattern is beats separated by spaces, each beat D, U, X (muted), x or - (rest): "D DU UDU", "D - DU -"' }
         song.strum = p
       }
       loaded.strums = placeStrums(song, loaded.chords)
@@ -406,7 +406,7 @@ async function runHero($: EngineInterface, line: string, quiet = false): Promise
       paneOpen = false
       return { text: 'cc-hero closed' }
     default:
-      return { text: `cc-hero: no verb "${verb}"\n${USAGE}` }
+      return { text: `no verb "${verb}"\n${USAGE}` }
   }
 }
 
@@ -540,7 +540,7 @@ async function micCommand($: EngineInterface, arg: string): Promise<{ text: stri
   if (what === 'off') { stopMic(); $.ui.invalidate('ui.render'); return { text: 'microphone listener stopped' } }
   if (what === 'devices') {
     const devices = await listDevices($)
-    if (devices.length === 0) return { text: 'cc-hero: no audio input devices found (is ffmpeg installed?)' }
+    if (devices.length === 0) return { text: 'no audio input devices found (is ffmpeg installed?)' }
     return { text: [...devices.map(d => `${d.index === settings.device ? '▶' : ' '} ${d.index}: ${d.name}`), '', '/hero mic device <number or name> picks one (a USB guitar interface shows up here once plugged in)'].join('\n') }
   }
   if (what.startsWith('device')) {
@@ -655,11 +655,11 @@ function stopMic() {
 const COACH_SYSTEM = 'You are a patient, specific guitar teacher. You get a data summary of a player\'s practice runs in a terminal practice tool: accuracy, timing offsets (late is positive), and which chords or notes they missed. Answer in plain prose, at most 120 words, no headings: name the one or two things the data actually shows, say what to practise and how (tempo, isolating a change, a fingering), and end with one concrete next drill from this list, written exactly as a command: /hero progression <key> <chords>, /hero pick <travis|arp|folk|waltz|pinch> <key> <chords>, /hero scale <pentatonic|major|minor|blues> <key> <box>, /hero caged <chord>. Do not invent data.'
 
 async function coach($: EngineInterface): Promise<{ text: string }> {
-  if (runs.length === 0) return { text: 'cc-hero: no runs yet · play something through, then /hero coach' }
+  if (runs.length === 0) return { text: 'no runs yet · play something through, then /hero coach' }
   const notes = coachNotes(runs, loaded?.key, Date.now())
   const song = loaded ? `Current song: "${loaded.song.title}" (${isChordSong(loaded.song) ? `chords: ${[...new Set(loaded.chords.map(c => c.name))].join(' ')}` : `${loaded.notes.length} notes`}) at ${loaded.song.bpm} bpm.` : ''
   const r = await $.model.complete({ model: settings.coach, system: COACH_SYSTEM, prompt: `${song}\n${notes}`, maxTokens: 400, effort: 'low', timeoutMs: 60000 })
-  if (!r.isAnswered) return { text: `cc-hero: the coach did not answer (${r.reason})` }
+  if (!r.isAnswered) return { text: `the coach did not answer (${r.reason})` }
   lastCoach = r.text.trim()
   return { text: `coach:\n${lastCoach}` }
 }
@@ -675,10 +675,10 @@ async function lessonCommand($: EngineInterface, arg: string): Promise<{ text: s
   if (arg === 'stop' || arg === 'off') { lesson = undefined; await $.store.delete('lesson').catch(() => undefined); return { text: 'lesson ended' } }
   const history = runs.length ? coachNotes(runs, undefined, Date.now()) : 'No runs recorded yet.'
   const r = await $.model.complete({ model: settings.coach, system: LESSON_SYSTEM, prompt: `The player wants to work on: ${arg}\n\nTheir recent history:\n${history}`, maxTokens: 800, effort: 'low', timeoutMs: 60000 })
-  if (!r.isAnswered) return { text: `cc-hero: no plan came back (${r.reason})` }
+  if (!r.isAnswered) return { text: `no plan came back (${r.reason})` }
   const m = /\{[\s\S]*\}/.exec(r.text)
   let plan: { title?: unknown; steps?: unknown }
-  try { plan = JSON.parse(m?.[0] ?? '') } catch { return { text: `cc-hero: the plan was not JSON:\n${r.text.slice(0, 400)}` } }
+  try { plan = JSON.parse(m?.[0] ?? '') } catch { return { text: `the plan was not JSON:\n${r.text.slice(0, 400)}` } }
   const steps: Lesson['steps'] = []
   const rejected: string[] = []
   for (const s of Array.isArray(plan.steps) ? plan.steps : []) {
@@ -695,7 +695,7 @@ async function lessonCommand($: EngineInterface, arg: string): Promise<{ text: s
       rejected.push(`${command} (${err instanceof Error ? err.message.slice(0, 60) : 'bad'})`)
     }
   }
-  if (steps.length === 0) return { text: `cc-hero: none of the plan's steps were runnable${rejected.length ? `: ${rejected.join('; ')}` : ''}` }
+  if (steps.length === 0) return { text: `none of the plan's steps were runnable${rejected.length ? `: ${rejected.join('; ')}` : ''}` }
   lesson = { title: typeof plan.title === 'string' ? plan.title : arg, goal: arg, steps, step: 0, done: steps.map(() => false) }
   await $.store.set('lesson', lesson).catch(() => undefined)
   const rows = steps.map((s, i) => `${i === 0 ? '▶' : ' '} ${i + 1}. ${s.command} · goal ${s.goal}% · ${s.why}`)

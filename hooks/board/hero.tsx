@@ -13,6 +13,7 @@ import { isLinePosition, nameOf, nearestString, staffPosition, STRING_LABELS, TU
 import { accuracyOf, judge, newJudge, verdictOf, WINDOW, type Grade, type JudgeState, type Judgment, type Target } from '../music/score.ts'
 import { chordLengthOf, lengthOf } from '../music/song.ts'
 import { templateOf } from '../music/chords.ts'
+import { blockWord, burst, drawParticles, finale, newFx, PURPLE, ring, shakeOf, shaken, step, type Fx } from './fx.ts'
 
 type Mode = 'idle' | 'countin' | 'playing' | 'paused' | 'done'
 
@@ -50,8 +51,10 @@ const LABEL = 2
 const FRAME_MS = 50
 const TAIL_BEATS = 2
 
-// the latest props and the posts waiting for the next frame: one instance per plugin
+// the latest props, the posts waiting for the next frame, and the effects in flight: one instance per plugin
 let latest: BoardProps | undefined
+const fx: Fx = newFx()
+let lastTick = 0
 const queue: BoardPost[] = []
 const enqueue = (p: BoardPost) => { queue.push(p) }
 
@@ -93,6 +96,8 @@ const GRADE_WORD: Record<Grade, string> = { perfect: 'PERFECT', great: 'great', 
 /** Lane colors, string 1 (high e) to 6, in the spirit of five-button guitars. */
 const STRING_COLOR = ['magenta', 'red', 'yellow', 'green', 'cyan', 'blue'] as const
 const FLASH_MS = 280
+/** The marker's column for a region this wide (the notes and chord boards agree). */
+const nowColOf = (columns: number) => LABEL + Math.max(4, Math.min(12, Math.floor((columns - LABEL) / 5)))
 const HOLD_POINTS_PER_BEAT = 25
 const isHit = (g: Grade) => g === 'perfect' || g === 'great' || g === 'good'
 const multiplierOf = (combo: number) => 1 + Math.min(3, Math.floor(combo / 10))
@@ -111,6 +116,9 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
       // one post per frame: a queued request first, else a poll while the mic is on
       const post = queue.shift() ?? (p.mic.on || s.ticks % 20 === 0 ? { kind: 'poll' } as const : undefined)
       if (post) surface.post(post)
+      const tNow = now()
+      step(fx, tNow, lastTick ? Math.min(200, tNow - lastTick) : FRAME_MS, surface.columns, surface.rows)
+      lastTick = tNow
       let next: State = { ...s, ticks: s.ticks + 1 }
       const song = p.song
       if (song && (s.mode === 'countin' || s.mode === 'playing')) {
@@ -124,12 +132,25 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
           next.last = lastMade
           const target = targetsOf(song).find(x => x.index === lastMade.index)
           const string = target && 'string' in target ? (target as { string: number }).string : undefined
-          next.flash = { at: now(), grade: lastMade.grade, ...(string !== undefined ? { string } : {}) }
+          next.flash = { at: tNow, grade: lastMade.grade, ...(string !== undefined ? { string } : {}) }
+          // sparks off the hit, a ring round a perfect, a shake and falling crosses for a miss
+          const fxX = nowColOf(surface.columns)
+          const fxY = song.kind === 'chords' ? 9 : 1 + ((string ?? 3) - 1)
+          for (const j of made) {
+            const color = GRADE_COLOR[j.grade]
+            if (isHit(j.grade)) burst(fx, fxX, fxY, j.grade === 'perfect' ? 10 : 6, [color, 'white'], tNow, { speed: j.grade === 'perfect' ? 16 : 11 })
+            if (j.grade === 'perfect') ring(fx, fxX, fxY, 'greenBright', tNow, 10)
+            if (j.grade === 'miss' || j.grade === 'wrong') { burst(fx, fxX, fxY, 5, ['red', 'magenta'], tNow, { glyphs: ['✗', '×', '·'], speed: 6, gravity: 14 }); fx.shakeUntil = tNow + 130 }
+          }
         }
         // combo milestones raise the multiplier; a miss after a streak loses it
         const combo = s.judge.tally.combo
         if (combo !== s.lastCombo) {
-          if (combo > 0 && combo % 10 === 0) next.banner = { text: `✦ ×${multiplierOf(combo)} MULTIPLIER ✦`, color: combo >= 30 ? 'cyan' : combo >= 20 ? 'magenta' : 'yellow', until: now() + 1600 }
+          if (combo > 0 && combo % 10 === 0) {
+            next.banner = { text: `✦ ×${multiplierOf(combo)} MULTIPLIER ✦`, color: combo >= 30 ? 'cyan' : combo >= 20 ? 'magenta' : 'yellow', until: tNow + 1600 }
+            ring(fx, nowColOf(surface.columns), 5, combo >= 30 ? 'cyanBright' : combo >= 20 ? 'magentaBright' : 'yellowBright', tNow, 26)
+            burst(fx, nowColOf(surface.columns), 5, 16, PURPLE, tNow, { speed: 18, life: 700, gravity: 3 })
+          }
           else if (combo === 0 && s.lastCombo >= 5) next.banner = { text: `combo lost (${s.lastCombo})`, color: 'red', until: now() + 1200 }
           next.lastCombo = combo
         }
@@ -147,6 +168,7 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
         }
         if (next.mode === 'playing' && t > (songLength(song) + TAIL_BEATS) * mpb) {
           next = { ...next, mode: 'done', pausedAt: now() }
+          finale(fx, verdictOf(s.judge.tally), tNow, surface.columns, Math.min(surface.rows, 22))
           if (!next.posted) {
             next.posted = true
             const tally = s.judge.tally
@@ -436,7 +458,8 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
   const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
   const header = headerOf(s, props, song, tempo)
   const status = statusOf(s, props, elapsed, mpb)
-  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? headerLine(Text, s, header) : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
+  overlay(put, s, columns, statusRow, DIAG)
+  const lines = gridLines(Text, grid, statusRow, s, header)
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && statusRow + 1 < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
   return <Box flexDirection="column">{lines}</Box>
@@ -586,8 +609,9 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   }
   // the now-marker, lit in the color of the last judgment for a moment after it
   const flashOn = s.flash && now() - s.flash.at < FLASH_MS
-  const markerColor = flashOn ? GRADE_COLOR[s.flash!.grade] : 'yellow'
-  for (let y = 1; y < statusRow; y++) if (isBackground(at(LABEL + NOW, y))) put(LABEL + NOW, y, { g: y === 7 ? '▼' : flashOn ? '┃' : '│', c: markerColor, bold: !!flashOn })
+  const onBeat = (s.mode === 'playing' || s.mode === 'countin') && ((beat % 1) + 1) % 1 < 0.12
+  const markerColor = flashOn ? GRADE_COLOR[s.flash!.grade] : onBeat ? 'yellowBright' : 'yellow'
+  for (let y = 1; y < statusRow; y++) if (isBackground(at(LABEL + NOW, y))) put(LABEL + NOW, y, { g: y === 7 ? '▼' : flashOn || onBeat ? '┃' : '│', c: markerColor, bold: !!flashOn || onBeat })
 
   // notes
   for (const n of song.notes) {
@@ -649,7 +673,8 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   const status = statusOf(s, props, elapsed, mpb)
   const help = HELP
 
-  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? headerLine(Text, s, header) : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
+  overlay(put, s, columns, statusRow, showStaff ? staffTop + 1 : 2)
+  const lines = gridLines(Text, grid, statusRow, s, header)
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && helpRow < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
   if (!showStaff) lines.push(<Text dimColor wrap="truncate-end">(staff hidden: the pane is too short · drag it taller or dock it)</Text>)
@@ -664,6 +689,32 @@ function headerLine(Text: TextTag, s: State, header: ReturnType<TextTag> | strin
   if (!banner) return <Text bold color={comboColor} wrap="truncate-end">{header}</Text>
   const cut = header.length - banner.text.length
   return <Text bold wrap="truncate-end"><Text color={comboColor}>{header.slice(0, cut)}</Text><Text color={banner.color} bold inverse>{banner.text}</Text></Text>
+}
+
+/** Particles over the grid, and while a run has just ended, its verdict in block letters cycling through the finale's colors. */
+function overlay(put: (x: number, y: number, cell: Cell) => void, s: State, columns: number, bottom: number, wordRow: number) {
+  const t = now()
+  drawParticles(fx, t, put, 1, bottom)
+  const f = fx.finale
+  if (!f) return
+  const rowsOfWord = blockWord(f.word)
+  if (!rowsOfWord) return
+  const width = rowsOfWord[0].length
+  const x0 = Math.max(LABEL, Math.floor((columns - width) / 2))
+  const phase = Math.floor(t / 90)
+  rowsOfWord.forEach((row, r) => {
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i]!
+      if (ch === ' ') continue
+      put(x0 + i, wordRow + r, { g: ch, c: PURPLE[(Math.floor(i / 4) + phase) % PURPLE.length], bold: true })
+    }
+  })
+}
+
+/** The grid as lines of styled runs, the header on top, shaken sideways for a moment after a miss. */
+function gridLines(Text: TextTag, grid: Cell[][], bottom: number, s: State, header: ReturnType<TextTag> | string) {
+  const shift = shakeOf(fx, now(), s.ticks)
+  return grid.slice(0, bottom).map((row, y) => (y === 0 ? headerLine(Text, s, header) : <Text>{runsOf(shaken(row, shift, { g: ' ' })).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
 }
 
 type Run = [text: string, cell: Cell]

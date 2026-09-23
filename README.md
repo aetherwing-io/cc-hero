@@ -112,8 +112,14 @@ A hit turns the note green (bright with a starburst for a perfect), a loose hit
 yellow, a wrong pitch magenta, a miss red, and the now-marker flashes in the
 same color. A long note you keep sounding glows as its tail crosses the marker
 and earns hold points on top of the hit. Ten hits in a row light a ×2
-multiplier banner (×3 at twenty, ×4 at thirty); a miss after a streak says so.
-The magenta diamond on the staff is the pitch the microphone hears right now.
+multiplier banner (×3 at twenty, ×4 at thirty) with a shockwave off the marker;
+a miss shakes the pane and says so. Sparks fly off every hit, and the end of a
+run blows up in purple with the verdict in block letters. The magenta diamond
+on the staff is the pitch the microphone hears right now.
+
+All of it is character cells: a mod's UI is a React-style element tree that
+Claude Code's terminal renderer paints, redrawn up to twenty times a second, so
+"effects" are glyphs, colors and timing rather than pixels.
 
 ## Exercises
 

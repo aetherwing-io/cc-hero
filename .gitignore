@@ -2,3 +2,6 @@
 .claude/types/
 node_modules/
 .DS_Store
+
+# local artwork generation notes
+/assets/README.md

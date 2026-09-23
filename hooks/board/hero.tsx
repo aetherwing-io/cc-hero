@@ -34,6 +34,13 @@ type State = {
   /** The search view's cursor, and the query it belongs to. */
   cursor: number
   cursorFor?: string
+  /** The last judgment's flash: when it landed, its grade, and where (a string or a chord). */
+  flash?: { at: number; grade: Grade; string?: number }
+  /** A banner over the header (a multiplier, a lost combo) and when it fades. */
+  banner?: { text: string; color: string; until: number }
+  /** Points earned by holding notes for their length while they still sound. */
+  bonus: number
+  lastCombo: number
 }
 
 type Cell = { g: string; c?: string; b?: string; bold?: boolean; dim?: boolean; inv?: boolean }
@@ -54,7 +61,7 @@ const targetsOf = (song: BoardSong): readonly Target[] => (song.kind === 'chords
 const songLength = (song: BoardSong) => (song.kind === 'chords' ? chordLengthOf(song.chords) : lengthOf(song.notes))
 
 function fresh(songKey: string): State {
-  return { songKey, mode: 'idle', origin: 0, pausedAt: 0, tempo: 1, judge: newJudge(), strums: [], help: false, posted: false, ticks: 0, cursor: 0 }
+  return { songKey, mode: 'idle', origin: 0, pausedAt: 0, tempo: 1, judge: newJudge(), strums: [], help: false, posted: false, ticks: 0, cursor: 0, bonus: 0, lastCombo: 0 }
 }
 
 /** Song-relative milliseconds for a state, negative before beat 0. */
@@ -83,6 +90,13 @@ function retempo(s: State, song: BoardSong, tempo: number): State {
 
 const GRADE_COLOR: Record<Grade, string> = { perfect: 'greenBright', great: 'green', good: 'yellow', wrong: 'magenta', miss: 'red' }
 const GRADE_WORD: Record<Grade, string> = { perfect: 'PERFECT', great: 'great', good: 'good', wrong: 'wrong note', miss: 'miss' }
+/** Lane colors, string 1 (high e) to 6, in the spirit of five-button guitars. */
+const STRING_COLOR = ['magenta', 'red', 'yellow', 'green', 'cyan', 'blue'] as const
+const FLASH_MS = 280
+const HOLD_POINTS_PER_BEAT = 25
+const isHit = (g: Grade) => g === 'perfect' || g === 'great' || g === 'good'
+const multiplierOf = (combo: number) => 1 + Math.min(3, Math.floor(combo / 10))
+const scoreOf = (s: State) => s.judge.tally.score + Math.floor(s.bonus)
 
 export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
   latest = props
@@ -106,7 +120,31 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
         const onsets: Onset[] = p.mic.on ? [...p.mic.onsets, ...s.strums] : s.strums
         const made = judge(s.judge, targetsOf(song), onsets, t, mpb, s.origin)
         const lastMade = made[made.length - 1]
-        if (lastMade) next.last = lastMade
+        if (lastMade) {
+          next.last = lastMade
+          const target = targetsOf(song).find(x => x.index === lastMade.index)
+          const string = target && 'string' in target ? (target as { string: number }).string : undefined
+          next.flash = { at: now(), grade: lastMade.grade, ...(string !== undefined ? { string } : {}) }
+        }
+        // combo milestones raise the multiplier; a miss after a streak loses it
+        const combo = s.judge.tally.combo
+        if (combo !== s.lastCombo) {
+          if (combo > 0 && combo % 10 === 0) next.banner = { text: `✦ ×${multiplierOf(combo)} MULTIPLIER ✦`, color: combo >= 30 ? 'cyan' : combo >= 20 ? 'magenta' : 'yellow', until: now() + 1600 }
+          else if (combo === 0 && s.lastCombo >= 5) next.banner = { text: `combo lost (${s.lastCombo})`, color: 'red', until: now() + 1200 }
+          next.lastCombo = combo
+        }
+        // holds: a hit note still sounding while its tail passes the marker earns bonus
+        if (next.mode === 'playing') {
+          const beatNow = t / mpb
+          const heardMidi = p.mic.on ? p.mic.now?.midi ?? -1 : undefined
+          for (const n of song.notes) {
+            if (n.len < 1 || beatNow <= n.beat || beatNow >= n.beat + n.len) continue
+            const j = s.judge.judged.get(n.index)
+            if (!j || !isHit(j.grade)) continue
+            if (heardMidi !== undefined && heardMidi !== n.midi) continue
+            next.bonus = (next.bonus ?? s.bonus) + (HOLD_POINTS_PER_BEAT * FRAME_MS) / mpb
+          }
+        }
         if (next.mode === 'playing' && t > (songLength(song) + TAIL_BEATS) * mpb) {
           next = { ...next, mode: 'done', pausedAt: now() }
           if (!next.posted) {
@@ -126,7 +164,7 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
               if (hit) { hits[label] = (hits[label] ?? 0) + 1; if (j.dtMs !== undefined) timing.push(j.dtMs) }
               else misses[label] = (misses[label] ?? 0) + 1
             }
-            enqueue({ kind: 'result', songKey: p.songKey, title: song.title, score: tally.score, accuracy: accuracyOf(tally), bestCombo: tally.bestCombo, verdict: verdictOf(tally), tempo: s.tempo, grades: { ...tally.byGrade }, hits, misses, timing })
+            enqueue({ kind: 'result', songKey: p.songKey, title: song.title, score: scoreOf({ ...s, ...next }), accuracy: accuracyOf(tally), bestCombo: tally.bestCombo, verdict: verdictOf(tally), tempo: s.tempo, grades: { ...tally.byGrade }, hits, misses, timing })
           }
         }
       }
@@ -235,13 +273,23 @@ function statusOf(s: State, props: BoardProps, elapsed: number, mpb: number): { 
     case 'idle': return { text: `space or enter starts · ${micText} · t tuner · ? keys` }
     case 'countin': return { text: `count-in ${Math.max(1, Math.ceil(-elapsed / mpb))} · ${micText}`, color: 'yellow' }
     case 'paused': return { text: 'paused · p resumes · r restarts', color: 'yellow' }
-    case 'done': return { text: `done · ${verdictOf(tally)} · ${tally.score} pts · ${accuracyOf(tally)}% · best combo ${tally.bestCombo} · enter plays again`, color: 'cyan' }
+    case 'done': return { text: `done · ${verdictOf(tally)} · ${scoreOf(s)} pts${s.bonus >= 1 ? ` (${Math.floor(s.bonus)} from holds)` : ''} · ${accuracyOf(tally)}% · best combo ${tally.bestCombo} · enter plays again`, color: 'cyan' }
     case 'playing': {
       const j = s.last
       const word = !j ? '…' : j.grade === 'wrong' ? `wrong: heard ${j.heard ?? (j.heardMidi === undefined ? '?' : nameOf(j.heardMidi))}` : j.grade === 'miss' ? 'miss' : `${GRADE_WORD[j.grade]} ${j.dtMs === undefined ? '' : `(${j.dtMs > 0 ? '+' : ''}${j.dtMs}ms)`}`
       return { text: `${word} · ${micText}`, color: j ? GRADE_COLOR[j.grade] : undefined }
     }
   }
+}
+
+/** The header: title, tempo, score with the hold bonus, combo with its multiplier, and a banner while one shows. */
+function headerOf(s: State, props: BoardProps, song: BoardSong, tempo: string): ReturnType<TextTag> | string {
+  const tally = s.judge.tally
+  const mult = multiplierOf(tally.combo)
+  const combo = `combo ${tally.combo}${mult > 1 ? ` ×${mult}` : ''}`
+  const base = `♪ ${song.title}${song.kind === 'chords' ? ` · chords${song.strumText ? ` · ${song.strumText}` : ''}` : ''} · ${song.bpm} bpm${tempo} · ${scoreOf(s)} pts · ${combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
+  const banner = s.banner && now() < s.banner.until ? s.banner : undefined
+  return banner ? `${base}   ${banner.text}` : base
 }
 
 const HELP = 'enter/space start · space strum · p pause · r restart · +/- tempo · m mic · t tuner · ? hide · q close · esc back to prompt'
@@ -258,6 +306,8 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
   const grid: Cell[][] = Array.from({ length: rows }, () => Array.from({ length: columns }, () => ({ g: ' ' })))
   const put = (x: number, y: number, cell: Cell) => { if (x >= 0 && x < columns && y >= 0 && y < rows) grid[y]![x] = cell }
   const text = (x: number, y: number, t: string, style: Omit<Cell, 'g'> = {}) => { for (let i = 0; i < t.length; i++) put(x + i, y, { g: t[i] ?? ' ', ...style }) }
+  const at = (x: number, y: number) => grid[y]?.[x]
+  const isBackground = (c: Cell | undefined) => !c || c.g === ' ' || c.g === '─' || c.g === '·' || c.g === '┊'
   const chords = song.chords
 
   // rows: header, section, six tab lines with each chord's voicing stacked at its beat, a ruler,
@@ -284,9 +334,11 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
     if (isBar) { for (let i = 0; i < 6; i++) put(x, TAB + i, { g: '┊', dim: true }); put(x, LANE, { g: '┊', dim: true }) }
     put(x, RULER, isBar ? { g: String(b / song.beatsPerBar + 1), dim: true } : { g: '·', dim: true })
   }
-  for (let i = 0; i < 6; i++) put(LABEL + NOW, TAB + i, { g: '│', c: 'yellow' })
-  put(LABEL + NOW, RULER, { g: '▼', c: 'yellow' })
-  put(LABEL + NOW, LANE, { g: '│', c: 'yellow' })
+  const flashOn = s.flash && now() - s.flash.at < FLASH_MS
+  const markerColor = flashOn ? GRADE_COLOR[s.flash!.grade] : 'yellow'
+  for (let i = 0; i < 6; i++) put(LABEL + NOW, TAB + i, { g: flashOn ? '┃' : '│', c: markerColor, bold: !!flashOn })
+  put(LABEL + NOW, RULER, { g: '▼', c: markerColor, bold: !!flashOn })
+  put(LABEL + NOW, LANE, { g: flashOn ? '┃' : '│', c: markerColor, bold: !!flashOn })
   // strums under the pattern: arrows on the lane's row above, each colored by its grade
   const STRUMS = LANE + 1
   if (song.strums.length) {
@@ -331,7 +383,10 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
         for (let k = 0; k < g.length; k++) put(sx + k, TAB + i, { g: g[k] ?? ' ', c: color, bold: first && (c === current || inWindow), dim: !first && !j, inv: first && onNow && !j })
       }
     }
-    text(x, LANE, c.name.slice(0, Math.max(1, end - x + 1)), { c: color, bold: c === current || inWindow, inv: onNow && !j })
+    // a hit chord's span glows on the lane while the marker crosses it
+    if (j && isHit(j.grade)) for (let lx = Math.max(LABEL, x + c.name.length); lx <= Math.min(end, LABEL + NOW); lx++) if (isBackground(at(lx, LANE))) put(lx, LANE, { g: '━', c: color, bold: true })
+    const chordFlash = s.flash && s.flash.string === undefined && now() - s.flash.at < FLASH_MS && onNow
+    text(x, LANE, c.name.slice(0, Math.max(1, end - x + 1)), { c: color, bold: c === current || inWindow, inv: (onNow && !j) || !!chordFlash })
     if (c.section && x >= LABEL) text(x, 1, c.section, { c: 'cyan', dim: true })
   }
   const heard = props.mic.on && props.mic.now?.chord && (props.mic.now.chordScore ?? 0) >= 0.75 ? props.mic.now.chord : undefined
@@ -379,9 +434,9 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
 
   const tally = s.judge.tally
   const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
-  const header = `♪ ${song.title} · chords${song.strumText ? ` · ${song.strumText}` : ''} · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
+  const header = headerOf(s, props, song, tempo)
   const status = statusOf(s, props, elapsed, mpb)
-  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
+  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? headerLine(Text, s, header) : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && statusRow + 1 < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
   return <Box flexDirection="column">{lines}</Box>
@@ -505,7 +560,7 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   // tab lines and labels
   for (let i = 0; i < 6; i++) {
     const y = 1 + i
-    put(0, y, { g: STRING_LABELS[i] ?? '?', dim: true })
+    put(0, y, { g: STRING_LABELS[i] ?? '?', c: STRING_COLOR[i] })
     put(1, y, { g: '|', dim: true })
     for (let x = LABEL; x < columns; x++) put(x, y, { g: '─', dim: true })
   }
@@ -529,8 +584,10 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
     if (showStaff) for (let pos = 0; pos <= 8; pos++) if (isBar) put(x, rowOfPos(pos), { g: '┊', dim: true })
     put(x, 7, isBar ? { g: String(b / song.beatsPerBar + 1), dim: true } : { g: '·', dim: true })
   }
-  // the now-marker
-  for (let y = 1; y < statusRow; y++) if (isBackground(at(LABEL + NOW, y))) put(LABEL + NOW, y, { g: y === 7 ? '▼' : '│', c: 'yellow' })
+  // the now-marker, lit in the color of the last judgment for a moment after it
+  const flashOn = s.flash && now() - s.flash.at < FLASH_MS
+  const markerColor = flashOn ? GRADE_COLOR[s.flash!.grade] : 'yellow'
+  for (let y = 1; y < statusRow; y++) if (isBackground(at(LABEL + NOW, y))) put(LABEL + NOW, y, { g: y === 7 ? '▼' : flashOn ? '┃' : '│', c: markerColor, bold: !!flashOn })
 
   // notes
   for (const n of song.notes) {
@@ -539,14 +596,23 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
     const j = s.judge.judged.get(n.index)
     const dtBeats = n.beat - beat
     const inWindow = dtBeats * mpb >= -WINDOW.late && dtBeats * mpb <= WINDOW.early
-    const color = j ? GRADE_COLOR[j.grade] : inWindow ? 'yellow' : dtBeats < 0 ? 'gray' : 'white'
+    const lane = STRING_COLOR[n.string - 1] ?? 'white'
+    const color = j ? GRADE_COLOR[j.grade] : inWindow ? 'yellow' : dtBeats < 0 ? 'gray' : lane
     const bold = j ? j.grade === 'perfect' : inWindow || dtBeats < 1
+    const hit = !!j && isHit(j.grade)
+    // a hit note whose tail is under the marker is being held: it glows while it still sounds
+    const holding = hit && n.len >= 1 && beat > n.beat && beat < n.beat + n.len && (!props.mic.on || props.mic.now?.midi === n.midi)
     // tab: the fret, and a tail for the note's length
     const ty = n.string
     const fret = String(n.fret)
     const tailEnd = xOf(n.beat + n.len) - 1
-    for (let tx = x + fret.length; tx <= tailEnd; tx++) if (isBackground(at(tx, ty))) put(tx, ty, { g: '═', c: color, dim: !j && !inWindow })
-    for (let i = 0; i < fret.length; i++) put(x + i, ty, { g: fret[i] ?? ' ', c: color, bold, inv: x + i === LABEL + NOW })
+    for (let tx = x + fret.length; tx <= tailEnd; tx++) {
+      if (!isBackground(at(tx, ty))) continue
+      const passed = tx <= LABEL + NOW
+      put(tx, ty, holding && passed ? { g: '━', c: color, bold: true, inv: true } : { g: hit ? '━' : '═', c: color, dim: !j && !inWindow, bold: hit && passed })
+    }
+    const flashing = s.flash && s.flash.string === n.string && now() - s.flash.at < FLASH_MS && Math.abs(x - (LABEL + NOW)) <= 1
+    for (let i = 0; i < fret.length; i++) put(x + i, ty, { g: flashing && isHit(s.flash!.grade) ? '✦' : fret[i] ?? ' ', c: color, bold, inv: x + i === LABEL + NOW || !!flashing })
     if (hasFingers && n.finger && x >= LABEL) put(x, 8, { g: n.finger, c: color, dim: !inWindow && !j })
     // the chord the note belongs to, named once where it begins
     if (n.chord && x >= LABEL + 1 && !song.notes.some(o => o.chord === n.chord && o.beat < n.beat && o.beat > n.beat - song.beatsPerBar)) {
@@ -567,7 +633,7 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
       for (const lx of [x - 1, x, x + 1]) if (isBackground(at(lx, ly))) put(lx, ly, { g: '─', c: color, dim: true })
     }
     if (n.sharp && x - 1 >= LABEL) put(x - 1, y, { g: '♯', c: color })
-    put(x, y, { g: n.len >= 2 ? '○' : '●', c: color, bold, inv: x === LABEL + NOW })
+    put(x, y, { g: j?.grade === 'perfect' ? '◉' : n.len >= 2 ? '○' : '●', c: color, bold, inv: x === LABEL + NOW || !!flashing })
   }
   // what the microphone hears, on the staff at the now-marker
   const heard = props.mic.on && props.mic.now ? props.mic.now : undefined
@@ -579,15 +645,25 @@ function board(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, son
   // header and status
   const tally = s.judge.tally
   const tempo = s.tempo === 1 ? '' : ` ×${s.tempo.toFixed(2)}`
-  const header = `♪ ${song.title} · ${song.bpm} bpm${tempo} · ${tally.score} pts · combo ${tally.combo} · ${accuracyOf(tally)}%${props.best ? ` · best ${props.best}` : ''}`
+  const header = headerOf(s, props, song, tempo)
   const status = statusOf(s, props, elapsed, mpb)
   const help = HELP
 
-  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
+  const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? headerLine(Text, s, header) : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && helpRow < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
   if (!showStaff) lines.push(<Text dimColor wrap="truncate-end">(staff hidden: the pane is too short · drag it taller or dock it)</Text>)
   return <Box flexDirection="column">{lines}</Box>
+}
+
+/** The header as a line: the banner, when one shows, in its color; the combo brighter as it grows. */
+function headerLine(Text: TextTag, s: State, header: ReturnType<TextTag> | string) {
+  if (typeof header !== 'string') return header
+  const banner = s.banner && now() < s.banner.until ? s.banner : undefined
+  const comboColor = s.judge.tally.combo >= 30 ? 'cyan' : s.judge.tally.combo >= 20 ? 'magenta' : s.judge.tally.combo >= 10 ? 'yellow' : undefined
+  if (!banner) return <Text bold color={comboColor} wrap="truncate-end">{header}</Text>
+  const cut = header.length - banner.text.length
+  return <Text bold wrap="truncate-end"><Text color={comboColor}>{header.slice(0, cut)}</Text><Text color={banner.color} bold inverse>{banner.text}</Text></Text>
 }
 
 type Run = [text: string, cell: Cell]

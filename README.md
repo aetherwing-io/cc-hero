@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme-banner.png" alt="cc-hero — Claude codes. You shred. Guitar practice inside Claude Code, illustrated with scrolling tablature and a glowing playhead." width="100%">
+  <img src="assets/readme-banner-v2.png" alt="cc-hero — Claude codes. You shred. An electric guitar cuts across violet stage lighting and glowing fret numbers. Start with /hero play pentatonic." width="100%">
 </p>
 
 # cc-hero
@@ -59,7 +59,7 @@ not enabled (`claude plugin list`). Update with `claude plugin marketplace updat
 Start `claude` (with the flag), then, inside the session:
 
 ```
-/hero play ode        # a built-in song: /hero list shows them
+/hero play pentatonic # A minor pentatonic, box 1: /hero list shows all built-ins
 /hero play my.json    # your own (see songs/README.md)
 /hero search wonderwall           # look a song up on Ultimate Guitar: the pane lists the results
 /hero play #2                     # or open one by number: chords play as a chord sheet, tabs as notes
@@ -85,27 +85,35 @@ tempo, **m** toggles the microphone, **t** toggles the tuner, **?** shows the ke
 
 ## What you see
 
+<p align="center">
+  <img src="assets/demo.gif" alt="cc-hero playing Ode to Joy in a Claude Code pane: tablature and staff notation scroll past the marker while each note is scored" width="100%">
+</p>
+
+Above: Ode to Joy played from a recording fed to the listener, docked beside the
+transcript in fullscreen mode.
+
+A tab excerpt from the built-in A minor pentatonic run. The pane also draws
+standard notation underneath.
+
 ```
-♪ Ode to Joy · 100 bpm · 340 pts · combo 4 · 92%
-e|─────────│─────────────────────────────────────
-B|─────────│─────────────────────────────────────
-G|─────────│──────────0═══──0═══─────────────────
-D|────2════│2═══──3═══──────────3═══──2═══──0═══─
-A|─────────│─────────────────────────────────────
-E|─────────│─────────────────────────────────────
-  ·    ·   ▼    ·    2    ·    ·    ·    3    ·
-  ─────────│─────────────────────────────────────
-  ─────────│─────────────────────────────────────
-𝄞 ─────────│─────────●────●──────────────────────
-  ─────────│─●─●─────────────●────●──────────────
-  ─────────│─────────────────────────●────●──────
-                                            ●
-PERFECT (+12ms) · mic ● E3 +4¢
+♪ A minor pentatonic, box 1 · 110 bpm · 900 pts · combo 9 · 100%
+e|────────────│───────5═══8═══8═══5═══────────┊───────────────┊─
+B|────────────5═══8═══────────┊───────8═══5═══┊───────────────┊─
+G|────5═══7═══│───────────────┊───────────────7═══5═══────────┊─
+D|7═══────────│───────────────┊───────────────┊───────7═══5═══┊─
+A|────────────│───────────────┊───────────────┊───────────────7═
+E|────────────│───────────────┊───────────────┊───────────────┊─
+  ·   ·   ·   3   ·   ·   ·   4   ·   ·   ·   5   ·   ·   ·   6
+PERFECT (+12ms) · mic ● E4 +4¢
 ```
 
-Notes turn green when hit (bright for a perfect), yellow for a loose hit, magenta
-for a wrong pitch, red for a miss. The magenta diamond on the staff is the pitch
-the microphone hears right now.
+Upcoming notes wear their string's color (high e magenta down to low E blue).
+A hit turns the note green (bright with a starburst for a perfect), a loose hit
+yellow, a wrong pitch magenta, a miss red, and the now-marker flashes in the
+same color. A long note you keep sounding glows as its tail crosses the marker
+and earns hold points on top of the hit. Ten hits in a row light a ×2
+multiplier banner (×3 at twenty, ×4 at thirty); a miss after a streak says so.
+The magenta diamond on the staff is the pitch the microphone hears right now.
 
 ## Exercises
 

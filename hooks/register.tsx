@@ -489,6 +489,13 @@ const placedOf = (key: string, song: AnySong): Omit<Loaded, 'cmd'> => {
   return { key, song, notes: place(song), chords: [], strums: [] }
 }
 
+/** A path as typed, with a leading ~ made absolute (a spawned child gets no shell to expand it). */
+async function expandHome($: EngineInterface, path: string): Promise<string> {
+  if (!path.startsWith('~/')) return path
+  const home = await $.env.get('HOME').catch(() => undefined)
+  return home ? `${home}${path.slice(1)}` : path
+}
+
 async function fetchText($: EngineInterface, url: string): Promise<string> {
   const r = await $.http.fetch(url, { headers: { 'user-agent': UA, accept: 'text/html' } })
   if (!r.ok) throw new Error(`${url} answered ${r.status}`)
@@ -518,7 +525,7 @@ async function load($: EngineInterface, name: string): Promise<Omit<Loaded, 'cmd
     return placedOf(key, song)
   }
   if (!/\.json$/i.test(name)) throw new Error(`no song "${name}" · /hero list shows them, /hero search finds one, or give a path to a .json file`)
-  const text = await $.fs.read(name)
+  const text = await $.fs.read(await expandHome($, name))
   let raw: unknown
   try { raw = JSON.parse(text) } catch { throw new Error(`${name} is not JSON`) }
   const song = parseSong(raw)
@@ -551,7 +558,7 @@ async function micCommand($: EngineInterface, arg: string): Promise<{ text: stri
     const parts = arg.slice(5).trim().split(/\s+/)
     const maybeLead = Number(parts[parts.length - 1])
     const hasLead = parts.length > 1 && Number.isFinite(maybeLead)
-    const path = (hasLead ? parts.slice(0, -1) : parts).join(' ')
+    const path = await expandHome($, (hasLead ? parts.slice(0, -1) : parts).join(' '))
     stopMic()
     pendingLead = hasLead ? maybeLead : undefined
     startMic($, path)

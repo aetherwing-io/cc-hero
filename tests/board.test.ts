@@ -74,3 +74,33 @@ describe('board', () => {
     await ui.unmount()
   })
 })
+
+describe('search', () => {
+  test('/hero search opens a picker; arrows and enter open a result', async ($, on) => {
+    const { page } = await import('./fixtures/ug-amazing-grace.ts')
+    const wrap = (data: unknown) => `<html><div class="js-store" data-content="${JSON.stringify({ store: { page: { data } } }).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></div></html>`
+    const searchHtml = wrap({ results: [
+      { id: 1, type: 'Tabs', song_name: 'Amazing Grace', artist_name: 'Trad', votes: 90, rating: 4.5, tab_url: 'https://tabs.ultimate-guitar.com/tab/trad/amazing-grace-tabs-1' },
+      { id: 614298, type: 'Chords', song_name: 'Amazing Grace', artist_name: 'Misc Praise Songs', votes: 50, rating: 4.9, tab_url: 'https://tabs.ultimate-guitar.com/tab/misc-praise-songs/amazing-grace-chords-614298' },
+    ] })
+    // hooks beneath the plugin register before the first call on $
+    on('http.fetch', ($, e) => ({ value: { status: 200, ok: true, headers: {}, text: e.url.includes('search.php') ? searchHtml : wrap(page) } }))
+    await boot($, on)
+    const { text } = await $.command.run({ command: 'hero', args: 'search amazing grace', origin: { kind: 'composer' } } as never)
+    expect(text).toContain('1. Tabs')
+    const ui = await $.ui.mount({ plugin: 'cc-hero', surface: 'terminal', component: 'Pane', requestId: 'hero', props: PANE, viewport: { columns: 150, rows: 45 } })
+    await ui.advance(50)
+    expect(await ui.find({ type: 'Text', text: /search: amazing grace · 2 results/, in: 'hero' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /▶  1\. Tabs/, in: 'hero' })).toBeDefined()
+    await ui.key({ key: 'down', in: 'hero' })
+    await ui.advance(50)
+    expect(await ui.find({ type: 'Text', text: /▶  2\. Chords/, in: 'hero' })).toBeDefined()
+    await ui.key({ key: 'return', in: 'hero' })
+    // the pick posts on the next frame; the hooks fetch the page and switch to the song
+    await ui.advance(50)
+    await ui.advance(50)
+    await ui.advance(50)
+    expect(await ui.find({ type: 'Text', text: /Amazing Grace · Misc Praise Songs · chords · 70 bpm/, in: 'hero' })).toBeDefined()
+    await ui.unmount()
+  })
+})

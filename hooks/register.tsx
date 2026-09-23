@@ -13,7 +13,7 @@ const PANE = 'hero'
 const PANE_ROWS = 26
 const USAGE = [
   '/hero play [song | path.json | url | #n]   open the pane with a song (default: ode)',
-  '/hero search <song or artist>   look a song up on Ultimate Guitar; then /hero play #n',
+  '/hero search <song or artist>   look a song up on Ultimate Guitar: pick in the pane with ↑↓ and enter, or /hero play #n',
   '/hero import beats|steps|bpm <n>  chord sheets: beats per chord (4); tabs: columns per beat (4), tempo (90)',
   '/hero list                      the built-in songs and the file format',
   '/hero tune                      the tuner (starts the microphone)',
@@ -31,7 +31,9 @@ let loaded: Loaded | undefined
 let lastSearch: UgResult[] = []
 let importOptions: ImportOptions = { ...DEFAULT_IMPORT }
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-let view: 'play' | 'tune' = 'play'
+let view: 'play' | 'tune' | 'search' = 'play'
+let lastQuery = ''
+let busy: string | undefined
 let best: Record<string, number> = {}
 let paneOpen = false
 
@@ -66,6 +68,8 @@ const boardProps = (nowMs: number): BoardProps => ({
   best: loaded ? best[loaded.key] ?? 0 : 0,
   view,
   ...(startAt !== undefined ? { startAt } : {}),
+  ...(lastQuery ? { search: { query: lastQuery, results: lastSearch.map(r => ({ type: r.type, song: r.song, artist: r.artist, votes: r.votes, rating: r.rating })) } } : {}),
+  ...(busy ? { busy } : {}),
 })
 
 export const register: Register = on => {
@@ -135,9 +139,12 @@ export const register: Register = on => {
           return { text: `cc-hero: search failed: ${err instanceof Error ? err.message : String(err)}` }
         }
         lastSearch = results.slice(0, 15)
+        lastQuery = arg
         if (lastSearch.length === 0) return { text: `cc-hero: nothing on Ultimate Guitar for "${arg}" (chords and tabs only)` }
+        view = 'search'
+        await open()
         const rows = lastSearch.map((r, i) => `${String(i + 1).padStart(2)}. ${r.type.padEnd(6)} ${r.song} · ${r.artist} · ${r.votes} votes${r.rating ? ` · ${r.rating.toFixed(1)}★` : ''}`)
-        return { text: [...rows, '', '/hero play #n opens one (chords play as a chord sheet with lyrics; tabs as notes)'].join('\n') }
+        return { text: [...rows, '', 'click the pane and pick with ↑↓ and enter, or /hero play #n (chords play as a chord sheet with lyrics; tabs as notes)'].join('\n') }
       }
       case 'import': {
         const [what = '', value = ''] = arg.split(/\s+/)
@@ -207,6 +214,21 @@ export const register: Register = on => {
     switch (post.kind) {
       case 'poll': break
       case 'view': view = post.view; break
+      case 'pick': {
+        const r = lastSearch[post.index]
+        if (!r) break
+        busy = `fetching ${r.song} · ${r.artist}…`
+        try {
+          loaded = await load($, r.url)
+          view = 'play'
+          await $.store.set('song', loaded.key).catch(() => undefined)
+          $.ui.toast(`cc-hero: ♪ ${loaded.song.title}${loaded.song.artist ? ` · ${loaded.song.artist}` : ''} · enter starts`)
+        } catch (err) {
+          $.ui.toast(`cc-hero: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        busy = undefined
+        break
+      }
       case 'mic': post.on ? startMic($) : stopMic(); break
       case 'close':
         stopMic()

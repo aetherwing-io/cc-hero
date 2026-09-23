@@ -17,8 +17,8 @@ then, inside the session:
 ```
 /hero play ode        # a built-in song: /hero list shows them
 /hero play my.json    # your own (see songs/README.md)
-/hero search wonderwall           # look a song up on Ultimate Guitar
-/hero play #2                     # open a result: chords play as a chord sheet, tabs as notes
+/hero search wonderwall           # look a song up on Ultimate Guitar: the pane lists the results
+/hero play #2                     # or open one by number: chords play as a chord sheet, tabs as notes
 /hero play https://tabs.ultimate-guitar.com/tab/...   # or paste a page's URL
 /hero tune            # the tuner
 /hero mic on          # start listening (ffmpeg; macOS asks once for microphone access)
@@ -29,6 +29,9 @@ then, inside the session:
 Use fullscreen rendering (`/tui fullscreen` once, or `CLAUDE_CODE_NO_FLICKER=1`):
 it captures the mouse so you can click the pane, and in a terminal 110 columns
 or wider it docks the pane beside the transcript, floor to ceiling.
+
+After a search, click the pane and pick a result with **↑**/**↓** (or j/k), **enter**
+to open it, a digit to jump, **t** to go back to the song.
 
 Click the pane to give it the keyboard, then: **enter** starts (with a one-bar
 count-in), **space** strums, **p** pauses, **r** restarts, **+**/**-** change the

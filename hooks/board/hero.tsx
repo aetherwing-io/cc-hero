@@ -31,6 +31,9 @@ type State = {
   ticks: number
   /** The `startAt` prop this run was started from, so it starts once. */
   startedFrom?: number
+  /** The search view's cursor, and the query it belongs to. */
+  cursor: number
+  cursorFor?: string
 }
 
 type Cell = { g: string; c?: string; b?: string; bold?: boolean; dim?: boolean; inv?: boolean }
@@ -51,7 +54,7 @@ const targetsOf = (song: BoardSong): readonly Target[] => (song.kind === 'chords
 const songLength = (song: BoardSong) => (song.kind === 'chords' ? chordLengthOf(song.chords) : lengthOf(song.notes))
 
 function fresh(songKey: string): State {
-  return { songKey, mode: 'idle', origin: 0, pausedAt: 0, tempo: 1, judge: newJudge(), strums: [], help: false, posted: false, ticks: 0 }
+  return { songKey, mode: 'idle', origin: 0, pausedAt: 0, tempo: 1, judge: newJudge(), strums: [], help: false, posted: false, ticks: 0, cursor: 0 }
 }
 
 /** Song-relative milliseconds for a state, negative before beat 0. */
@@ -121,6 +124,16 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
       if (!s || !p) return
       const song = p.song
       const k = key === 'space' ? ' ' : key.length === 1 ? key.toLowerCase() : key
+      if (p.view === 'search' && p.search) {
+        const n = p.search.results.length
+        if (k === 'down' || k === 'j') return surface.setState({ ...s, cursor: n ? (s.cursor + 1) % n : 0 })
+        if (k === 'up' || k === 'k') return surface.setState({ ...s, cursor: n ? (s.cursor - 1 + n) % n : 0 })
+        if (/^[1-9]$/.test(k) && Number(k) <= n) return surface.setState({ ...s, cursor: Number(k) - 1 })
+        if ((k === 'return' || k === ' ') && n) return enqueue({ kind: 'pick', index: s.cursor })
+        if (k === 't' || k === 'escape') return enqueue({ kind: 'view', view: 'play' })
+        if (k === 'q') return enqueue({ kind: 'close' })
+        return
+      }
       if (k === '?') return surface.setState({ ...s, help: !s.help })
       if (k === 't') return enqueue({ kind: 'view', view: p.view === 'tune' ? 'play' : 'tune' })
       if (k === 'm') return enqueue({ kind: 'mic', on: !p.mic.on })
@@ -172,6 +185,7 @@ export default function Hero(props: BoardProps, surface: ClientSurface<State>) {
   const rows = surface.rows
   if (columns < 40 || rows < 8) return <Text dimColor>cc-hero needs a wider, taller pane (drag its edge, or dock it in a fullscreen terminal)</Text>
 
+  if (props.view === 'search') return searchView(Text, Box, props, s, surface, columns, rows)
   if (props.view === 'tune') return tuner(Text, Box, props, columns)
   if (!props.song) return <Text dimColor>no song loaded · /hero play ode · /hero list · /hero search {'<song>'}</Text>
 
@@ -336,6 +350,31 @@ function chordBoard(Text: TextTag, Box: ClientElements['Box'], props: BoardProps
   const lines = grid.slice(0, statusRow).map((row, y) => (y === 0 ? <Text bold wrap="truncate-end">{header}</Text> : <Text>{runsOf(row).map(([t, c]) => <Text color={c.c} backgroundColor={c.b} bold={c.bold} dimColor={c.dim} inverse={c.inv}>{t}</Text>)}</Text>))
   lines.push(<Text color={status.color} wrap="truncate-end">{status.text}</Text>)
   if (s.help && statusRow + 1 < rows) lines.push(<Text dimColor wrap="truncate-end">{HELP}</Text>)
+  return <Box flexDirection="column">{lines}</Box>
+}
+
+/** The search view: results under a cursor; up and down move it, enter opens, t goes back. */
+function searchView(Text: TextTag, Box: ClientElements['Box'], props: BoardProps, s: State, surface: ClientSurface<State>, columns: number, rows: number) {
+  const search = props.search
+  const lines: ReturnType<TextTag>[] = []
+  if (!search) {
+    lines.push(<Text dimColor>{'/hero search <song or artist> looks a song up on Ultimate Guitar'}</Text>)
+    return <Box flexDirection="column">{lines}</Box>
+  }
+  if (s.cursorFor !== search.query) surface.setState({ ...s, cursor: 0, cursorFor: search.query })
+  const cursor = s.cursorFor === search.query ? s.cursor : 0
+  lines.push(<Text bold wrap="truncate-end">{`search: ${search.query} · ${search.results.length} results · ↑↓ or j/k move · enter opens · 1-9 jump · t back · q close`}</Text>)
+  if (props.busy) lines.push(<Text color="yellow" wrap="truncate-end">{props.busy}</Text>)
+  const visible = Math.max(3, rows - 3)
+  const top = Math.max(0, Math.min(cursor - Math.floor(visible / 2), search.results.length - visible))
+  search.results.slice(top, top + visible).forEach((r, i) => {
+    const index = top + i
+    const at = index === cursor
+    const num = String(index + 1).padStart(2)
+    const text = `${at ? '▶' : ' '} ${num}. ${r.type.padEnd(6)} ${r.song} · ${r.artist} · ${r.votes} votes${r.rating ? ` · ${r.rating.toFixed(1)}★` : ''}`
+    lines.push(<Text color={at ? 'yellow' : r.type === 'Chords' ? 'cyan' : 'white'} bold={at} inverse={at} wrap="truncate-end">{text.slice(0, columns)}</Text>)
+  })
+  if (search.results.length === 0) lines.push(<Text dimColor>nothing found (chords and tabs only)</Text>)
   return <Box flexDirection="column">{lines}</Box>
 }
 
